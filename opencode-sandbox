@@ -22,7 +22,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-VERSION="0.2.0"  # bump with each release, see CHANGELOG.md
+VERSION="0.3.0"  # bump with each release, see CHANGELOG.md
 # Tagged with the launcher's version, so after an update the next run builds
 # the matching image by itself.
 IMAGE="opencode-sandbox:$VERSION"
@@ -86,6 +86,13 @@ Commands:
                   (shows a numbered list to pick from if NAME is omitted)
   --pubkey NAME   print the public key a sandbox uses
   --shell NAME    open bash inside a sandbox that is currently open
+  --cp NAME PATH...
+                  copy files or folders from this machine into a sandbox's
+                  /workspace, open or closed (same checks as -w). opencode sees
+                  them right away; no restart needed
+  --get NAME PATH...
+                  copy files or folders out of a sandbox (paths relative to its
+                  /workspace) into the current folder; never overwrites
   --rm NAME...    delete sandboxes, their files and their disposable keys
   --rm --all      delete every sandbox (asks first)
   --status        show the ssh-agents of open sandboxes and their keys
@@ -390,19 +397,27 @@ prepare() {
   gc_agents
 }
 
-resolve_workspace() {
-  local dir home p
-  dir="$(readlink -f "${1:-$PWD}")" || die "bad directory: ${1:-$PWD}"
-  [[ -d "$dir" ]] || die "not a directory: $dir"
+# Refuse paths that would hand a sandbox your secrets, or let it write among
+# them: used for -w and --cp (what goes in) and for --get (where files land).
+check_path() {  # $1 resolved path, $2 what we're doing ("copy", "copy files into")
+  local path="$1" home p
   home="$(readlink -f "$HOME")"
-  # Never copy your home dir (or anything containing it) in: ~/.ssh is in there.
-  [[ "$home/" == "${dir%/}/"* ]] && die "refusing to copy $dir: it contains your home directory"
+  # Never your home dir, or anything containing it: ~/.ssh is in there.
+  [[ "$home/" == "${path%/}/"* ]] && die "refusing to $2 $path: it contains your home directory"
   for p in .ssh .gnupg .config .local .aws .kube .docker; do
-    [[ "$dir/" == "$home/$p/"* ]] && die "refusing to copy $dir: it is inside ~/$p"
+    [[ "$path/" == "$home/$p/"* ]] && die "refusing to $2 $path: it is inside ~/$p"
   done
   # Nor this launcher's own files (which include the disposable keys).
-  [[ "$HERE/" == "${dir%/}/"* || "$dir/" == "$HERE/"* ]] \
-    && die "refusing to copy $dir: it contains the opencode-sandbox setup ($HERE)"
+  [[ "$HERE/" == "${path%/}/"* || "$path/" == "$HERE/"* ]] \
+    && die "refusing to $2 $path: it is in or contains the opencode-sandbox folder ($HERE), which holds the disposable keys"
+  return 0
+}
+
+resolve_workspace() {
+  local dir
+  dir="$(readlink -f "${1:-$PWD}")" || die "bad directory: ${1:-$PWD}"
+  [[ -d "$dir" ]] || die "not a directory: $dir"
+  check_path "$dir" copy
   printf '%s\n' "$dir"
 }
 
@@ -541,6 +556,46 @@ remove_sandboxes() {
   done
 }
 
+# --cp: files and folders from this machine into a sandbox's /workspace. Works
+# open or closed; opencode sees new files at once, no restart needed.
+copy_in() {  # $1 sandbox, then paths
+  local name="${1:-}" src real; shift || true
+  [[ -n "$name" && $# -gt 0 ]] || die "usage: opencode-sandbox --cp NAME PATH..."
+  exists "$name" || die "no sandbox named '$name' (see --list)"
+  for src in "$@"; do  # check everything before copying anything
+    [[ -e "$src" || -L "$src" ]] || die "no such file or folder: $src"
+    real="$(readlink -f "$src")" || die "bad path: $src"
+    check_path "$real" copy
+  done
+  for src in "$@"; do
+    docker cp -q "$src" "$PREFIX$name:/workspace/" || die "could not copy $src into '$name'"
+    echo "copied $src into $name:/workspace/"
+  done
+}
+
+# --get: files and folders out of a sandbox into the current folder. Never
+# overwrites; what comes out was written by the agent, so treat it as untrusted.
+copy_out() {  # $1 sandbox, then paths (relative to /workspace, or absolute)
+  local name="${1:-}" p src base here; shift || true
+  [[ -n "$name" && $# -gt 0 ]] || die "usage: opencode-sandbox --get NAME PATH..."
+  exists "$name" || die "no sandbox named '$name' (see --list)"
+  here="$(pwd -P)"
+  check_path "$here" "copy files into"
+  for p in "$@"; do
+    if [[ "$p" == /* ]]; then src="$p"; else src="/workspace/$p"; fi
+    base="${src%/}"; base="${base##*/}"
+    [[ -n "$base" && "$base" != . && "$base" != .. ]] || die "name a file or folder in the sandbox, not $p"
+    [[ ! -e "$here/$base" && ! -L "$here/$base" ]] \
+      || die "$here/$base already exists; move it away or run --get from another folder"
+  done
+  for p in "$@"; do
+    if [[ "$p" == /* ]]; then src="$p"; else src="/workspace/$p"; fi
+    base="${src%/}"; base="${base##*/}"
+    docker cp -q "$PREFIX$name:$src" "$here/" || die "could not copy $src out of '$name'"
+    echo "copied $name:$src to $here/$base"
+  done
+}
+
 abandon_sandbox() {  # undo a half-finished creation
   rm -f -- "$(config_file "$SB_NAME")"
   stop_agent "$(agent_dir "$SB_NAME")"
@@ -589,6 +644,8 @@ case "${1:-}" in
   --build)  shift; build_image "$@"; exit ;;
   --list)   gc_agents; list_sandboxes; exit ;;
   --rm)     shift; remove_sandboxes "$@"; exit ;;
+  --cp)     shift; copy_in "$@"; exit ;;
+  --get)    shift; copy_out "$@"; exit ;;
   --status)
     gc_agents; found=0
     for d in "$RUNDIR"/agents/*/; do

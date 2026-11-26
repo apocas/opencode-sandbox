@@ -137,6 +137,8 @@ opencode-sandbox [-w DIR] [-n NAME] [-k KEY] [-p PROVIDER] [-- ARGS...]
 | `--resume [NAME]` | reopen a sandbox and continue its last session (pick from a list if no NAME) |
 | `--pubkey NAME` | print the public key a sandbox uses |
 | `--shell NAME` | bash inside an open sandbox |
+| `--cp NAME PATH...` | copy files or folders into a sandbox's `/workspace`, open or closed |
+| `--get NAME PATH...` | copy files or folders out of a sandbox (paths relative to `/workspace`) into the current folder |
 | `--rm NAME...` / `--rm --all` | delete sandboxes, their files and disposable keys |
 | `--status` | show the ssh-agents of open sandboxes |
 | `--stop-agent` | stop all sandbox ssh-agents |
@@ -145,6 +147,22 @@ opencode-sandbox [-w DIR] [-n NAME] [-k KEY] [-p PROVIDER] [-- ARGS...]
 
 Quitting opencode or closing the terminal stops the sandbox and unloads its key.
 Press `ctrl-]` `ctrl-]` to detach and leave it running; `--resume` reattaches.
+
+### Adding files later
+
+The folder is copied in once, when the sandbox is created: files you add to it
+afterwards don't reach the sandbox. Copy them in with `--cp`, even while
+opencode is running; it can use them straight away, no restart needed:
+
+```bash
+opencode-sandbox --cp agent-work-3f9a ./logs.txt ./configs   # into /workspace
+opencode-sandbox --get agent-work-3f9a report.md             # out, into the current folder
+```
+
+`--cp` refuses the same paths as `-w` (your home folder, `~/.ssh`, `~/.config`
+and similar, and this tool's own folder). `--get` never overwrites a file, and
+won't write into those folders either. Whatever comes out was written by the
+agent, so treat it as untrusted.
 
 ## SSH through a jump host
 

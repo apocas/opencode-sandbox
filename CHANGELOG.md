@@ -4,6 +4,17 @@ All notable changes to opencode-sandbox. Versions follow
 [Semantic Versioning](https://semver.org); each release is tagged `vX.Y.Z`.
 To update, see [Updating](README.md#updating).
 
+## [0.3.0] - 2026-11-26
+
+### Added
+
+- `--cp NAME PATH...` copies files or folders into a sandbox's `/workspace`,
+  whether it's open or closed; opencode can use them straight away. It refuses
+  the same paths as `-w`.
+- `--get NAME PATH...` copies files or folders out of a sandbox into the
+  current folder. It never overwrites, and won't write into your home folder,
+  `~/.ssh` and similar.
+
 ## [0.2.0] - 2026-11-26
 
 ### Added
@@ -73,6 +84,7 @@ First release.
   `--resume` warns about sandboxes created by an older version.
 - Bundles opencode 2.4.2 (x86_64 and arm64 builds, checksums verified).
 
+[0.3.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.3.0
 [0.2.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.2.0
 [0.1.1]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.1.1
 [0.1.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.1.0
