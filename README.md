@@ -18,7 +18,8 @@ down:
   invisible.
 - **Disposable keys.** Generated per sandbox and kept outside `~/.ssh`. The
   public part is shown so you can add it to `authorized_keys`; the key is deleted
-  with the sandbox.
+  with the sandbox. On macOS and Docker Desktop, where a sandbox can't reach an
+  ssh-agent on your machine, these are what you get (see [Platforms](#platforms)).
 - **Your files are copied, not mounted.** The sandbox gets a snapshot of a
   folder. Nothing the agent writes reaches the original.
 - **Only the providers you choose.** Each sandbox gets a filtered copy of your
@@ -31,24 +32,32 @@ down:
 - **As many sandboxes as you like.** Every run creates a new one. List them,
   resume one (continuing its last opencode session), or delete them.
 
+## Platforms
+
+| Setup | SSH keys a sandbox can get |
+|---|---|
+| Linux with Docker Engine (rootful) | a key pair from `~/.ssh`, a disposable key, or none. Private keys never enter the sandbox. |
+| macOS; Docker Desktop on any OS (including Windows with WSL); rootless Docker; userns-remap | a disposable key, or none. The disposable key's private part is stored **inside** the sandbox. |
+
+In the second group, Docker runs containers in a VM or under another uid, so a
+sandbox can't use an ssh-agent on your machine. (Docker Desktop's built-in SSH
+passthrough would forward your *main* agent with all its keys, which is what
+this tool avoids.) opencode-sandbox detects this and switches by itself; keys
+from `~/.ssh` are then never offered, because they would have to be copied in.
+Set `OPENCODE_SANDBOX_NO_AGENT=1` to use this mode anywhere.
+
+Tested on Ubuntu (x86_64) with Docker 29, OpenSSH 10.2 and opencode 2.4.2,
+including the no-agent mode (forced with `OPENCODE_SANDBOX_NO_AGENT=1`). Not yet
+tested on a Mac or on arm64: please report what you find.
+
 ## Requirements
 
-- **Linux** with Docker Engine (rootful), used as a regular user.
-- **Not supported:** the launcher checks for these and stops with an explanation.
-  - macOS and Windows, and Docker Desktop on any OS. They run containers in a
-    VM, and a container in that VM can't connect to the per-sandbox ssh-agent
-    sockets on your machine. Docker Desktop's built-in SSH passthrough forwards
-    your *main* agent, with all its keys, which is what this tool avoids.
-  - Rootless Docker and userns-remap. The container has to run as your uid for
-    its ssh-agent to accept it.
-- bash 4.4+, the OpenSSH client tools (`ssh-agent`, `ssh-add`, `ssh-keygen`),
-  `jq`, GNU coreutils.
+- Docker, used as a regular user (not root).
+- bash 4.4+, `jq` and the OpenSSH client tools (`ssh-agent`, `ssh-add`,
+  `ssh-keygen`). On macOS (12.3 or newer): `brew install bash jq`.
 - An opencode config at `~/.config/opencode/opencode.json` (plain JSON) with
   your provider(s) under `provider`. Providers you logged into with
   `opencode auth login` aren't passed to sandboxes.
-
-Tested on Ubuntu (x86_64) with Docker 29, OpenSSH 10.2 and opencode 2.4.2. The
-Dockerfile also handles arm64 Linux, but that hasn't been tested yet.
 
 ## Install
 
@@ -97,7 +106,8 @@ opencode-sandbox
 
 You'll be asked which SSH key the sandbox may use and, if your config has more
 than one, which provider. opencode then opens with a copy of the folder at
-`/workspace`.
+`/workspace`. (On macOS and Docker Desktop the key menu offers only a new
+disposable key or none.)
 
 ```
 Which SSH key may sandbox 'agent-work-3f9a' use?
@@ -117,7 +127,7 @@ opencode-sandbox [-w DIR] [-n NAME] [-k KEY] [-p PROVIDER] [-- ARGS...]
 |---|---|
 | `-w DIR` | folder to copy in (default: the current one). Your home folder, `~/.ssh` and similar are refused |
 | `-n NAME` | sandbox name (default: folder name plus a random suffix) |
-| `-k KEY` | a key name from `~/.ssh`, `new` (disposable) or `none`; asked if omitted |
+| `-k KEY` | a key name from `~/.ssh`, `new` (disposable) or `none`; asked if omitted. Only `new` or `none` on [some platforms](#platforms) |
 | `-p PROVIDER` | provider id(s) from your opencode config, several as `a,b`; asked if omitted, automatic if you have only one |
 | `-- ARGS` | passed to opencode |
 
@@ -146,7 +156,10 @@ ssh -i ~/.ssh/id_ed25519 -A -p 2222 user@jump.example.com \
 ```
 
 - The public key is mounted under its own name, so `-i ~/.ssh/<name>` works
-  as-is inside the sandbox.
+  as-is inside the sandbox. A disposable key is `~/.ssh/sandbox_key`, which ssh
+  uses even without `-i`.
+- Without a host agent ([Platforms](#platforms)), the disposable key is loaded
+  into an ssh-agent inside the sandbox, so `-A` works the same way.
 - Quote the remote command twice, as above. With one layer of quotes, `$(...)`
   is expanded on the jump host instead of the target.
 - `-A` forwards the agent, so while connected, root on the jump host can use the
@@ -161,13 +174,16 @@ ssh -i ~/.ssh/id_ed25519 -A -p 2222 user@jump.example.com \
 
 On the host:
 
-- `$XDG_RUNTIME_DIR/opencode-sandbox/agents/NAME/`: the sandbox's ssh-agent,
+Runtime files live in `$XDG_RUNTIME_DIR/opencode-sandbox/`, or
+`$TMPDIR/opencode-sandbox-UID/` where that isn't set (as on macOS):
+
+- `agents/NAME/`: the sandbox's ssh-agent,
   started when the sandbox opens and stopped when it closes. Only its socket
   directory is mounted into the sandbox. The agent refuses to load PKCS#11/FIDO
   provider libraries.
-- `$XDG_RUNTIME_DIR/opencode-sandbox/configs/NAME.json`: the sandbox's filtered
-  opencode config, in RAM and readable only by you. It's regenerated from your
-  config every time the sandbox starts, so a rotated API key is picked up.
+- `configs/NAME.json`: the sandbox's filtered opencode config, in a directory
+  only you can open. It's regenerated from your config every time the sandbox
+  starts, so a rotated API key is picked up.
 - `keys/` and `known_hosts` next to the script: disposable keys and seeded host
   keys. Both are git-ignored.
 
@@ -177,6 +193,9 @@ In the sandbox:
   kept until you `--rm` the sandbox.
 - `~/.ssh` holds only the public key; `SSH_AUTH_SOCK` points at the mounted
   agent socket. A sandbox created with `-k none` gets neither.
+- Without a host agent, the disposable key is mounted read-only instead, copied
+  to `~/.ssh/sandbox_key` at each start, and loaded into an ssh-agent running
+  inside the sandbox.
 
 ## What it doesn't protect against
 
@@ -185,6 +204,9 @@ In the sandbox:
   listening on the host.
 - **Anything inside an open sandbox can use its key**, and so log into every
   server that trusts it. With `ssh -A`, so can root on the host you forward to.
+- **Without a host agent, the disposable key can be copied out.** Whatever runs
+  in the sandbox can read it, and a copy keeps working wherever you authorized
+  it until you remove it from `authorized_keys`, even after `--rm`.
 - **The provider API key is readable inside the sandbox**, since opencode needs it.
 - **A sandbox's home persists until you delete it.** Something planted there runs
   again when you resume that sandbox.
@@ -197,6 +219,7 @@ In the sandbox:
 | Variable | |
 |---|---|
 | `OPENCODE_SANDBOX_CONFIG` | opencode config to take providers from (default `~/.config/opencode/opencode.json`) |
+| `OPENCODE_SANDBOX_NO_AGENT` | `1` to use the no-agent mode ([Platforms](#platforms)) even where a host ssh-agent would work |
 | `OPENCODE_SANDBOX_SEED_HOSTS` | space-separated hosts whose keys are copied from `~/.ssh/known_hosts` into sandboxes; read when `known_hosts` is created, delete it to re-seed |
 
 To use another opencode release, pass its version and archive checksums:

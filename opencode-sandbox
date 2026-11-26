@@ -9,6 +9,10 @@
 # ssh-agent holding only its key, and only that agent's socket is mounted in.
 # The agent is stopped when the sandbox closes.
 #
+# Where Docker can't reach a host ssh-agent (macOS, Docker Desktop, rootless
+# Docker), sandboxes get only a disposable key, stored inside the sandbox, or
+# none: keys from ~/.ssh are never copied in.
+#
 # Files: DIR is COPIED into a sandbox when it is created, never mounted, so
 # nothing the agent writes reaches DIR. Each sandbox has its own /workspace and
 # home (opencode sessions). Exiting opencode stops the sandbox and every process
@@ -18,7 +22,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-VERSION="0.1.1"  # bump with each release, see CHANGELOG.md
+VERSION="0.2.0"  # bump with each release, see CHANGELOG.md
 # Tagged with the launcher's version, so after an update the next run builds
 # the matching image by itself.
 IMAGE="opencode-sandbox:$VERSION"
@@ -30,7 +34,9 @@ DETACH_KEYS="ctrl-],ctrl-]"
 KEYS_DIR="$HERE/keys"
 # Your opencode config; sandboxes get filtered copies of it.
 CONFIG="${OPENCODE_SANDBOX_CONFIG:-$HOME/.config/opencode/opencode.json}"
-RUNDIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/opencode-sandbox"
+# Per-user runtime files (agents, generated configs); $TMPDIR on macOS.
+if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then RUNDIR="$XDG_RUNTIME_DIR/opencode-sandbox"
+else RUNDIR="${TMPDIR:-/tmp}"; RUNDIR="${RUNDIR%/}/opencode-sandbox-$(id -u)"; fi
 # Hosts (e.g. a jump host) whose keys are copied from your ~/.ssh/known_hosts
 # into ./known_hosts, which every sandbox trusts, so the first hop is verified.
 # Read when ./known_hosts is created; delete that file to re-seed.
@@ -63,6 +69,10 @@ Options for a new sandbox:
                           servers. Kept in:
                           $KEYS_DIR
                     none  no SSH access
+                  Where Docker can't reach an ssh-agent on this machine (macOS,
+                  Docker Desktop, rootless Docker), only "new" and "none" are
+                  offered, and the new key's private part is stored inside
+                  the sandbox, where the agent can read it.
   -p PROVIDER     the opencode provider(s) the sandbox may use, from your
                   opencode config; several as a,b (asked if omitted, or picked
                   automatically when you have only one). The sandbox gets a
@@ -88,6 +98,8 @@ Commands:
 Environment:
   OPENCODE_SANDBOX_CONFIG      opencode config to take providers from
                                (default: ~/.config/opencode/opencode.json)
+  OPENCODE_SANDBOX_NO_AGENT    set to 1 to use the no-agent mode above even
+                               where a host ssh-agent would work
   OPENCODE_SANDBOX_SEED_HOSTS  hosts (e.g. a jump host) whose keys are copied
                                from your ~/.ssh/known_hosts into sandboxes so
                                the first hop is verified; space-separated,
@@ -116,6 +128,11 @@ names()  { docker ps -a --filter "label=$LABEL" --format "{{.Label \"$LABEL\"}}"
 
 # --- per-sandbox ssh-agents --------------------------------------------------
 
+ensure_rundir() {  # the runtime dir holds keys' agents and API keys: must be ours
+  install -d -m 700 "$RUNDIR"
+  [[ -O "$RUNDIR" && ! -L "$RUNDIR" ]] || die "$RUNDIR isn't a directory owned by you; refusing to use it"
+}
+
 agent_dir()   { printf '%s/agents/%s\n' "$RUNDIR" "$1"; }  # only <dir>/sock is mounted
 on_sock()     { SSH_AUTH_SOCK="$1" "${@:2}"; }
 fingerprint() { ssh-keygen -lf "$1" | awk '{print $2}'; }
@@ -125,7 +142,8 @@ ensure_agent() {  # $1 sandbox, $2 private key: (re)start an agent holding only 
   dir="$(agent_dir "$1")"; sock="$dir/sock/ssh-agent.sock"
   [[ -r "$2" && -r "$2.pub" ]] || die "missing key $2 (or its .pub)"
   want="$(fingerprint "$2.pub")"
-  install -d -m 700 "$RUNDIR" "$RUNDIR/agents" "$dir" "$dir/sock"
+  ensure_rundir
+  install -d -m 700 "$RUNDIR/agents" "$dir" "$dir/sock"
   printf '%s\n' "$2" >"$dir/key"
   touch "$dir"  # marks it fresh for gc_agents
 
@@ -178,15 +196,20 @@ home_keys() {  # key pairs in ~/.ssh
   return 0
 }
 
-# Sets KEY_KIND (home|disposable|none), KEY_PATH and KEY_NAME (file name in the sandbox).
+# Sets KEY_KIND (home|disposable|none), KEY_PATH, KEY_NAME (file name in the
+# sandbox) and KEY_MODE: agent (host ssh-agent), file (key stored inside the
+# sandbox, only for disposable keys where no agent is possible) or none.
 choose_key() {
-  local want="$1" n i total; local -a keys
-  mapfile -t keys < <(home_keys)
+  local want="$1" n i total; local -a keys=()
+  [[ -z "$AGENT_OK" ]] || mapfile -t keys < <(home_keys)
   total=$(( ${#keys[@]} + 2 ))
   if [[ -z "$want" ]]; then
     [[ -t 0 ]] || die "no terminal to ask which SSH key to use; pass -k NAME, -k new or -k none"
     {
       echo "Which SSH key may sandbox '$SB_NAME' use?"
+      [[ -n "$AGENT_OK" ]] \
+        || echo "(Keys from ~/.ssh aren't offered because $NO_AGENT_WHY: they would have to be copied into the sandbox. A new disposable key is stored inside it.)" \
+           | fold -s -w 76 | sed 's/^/  /'
       for i in "${!keys[@]}"; do
         printf '  %d) %-16s %s\n' $((i + 1)) "${keys[i]##*/}" \
           "$(ssh-keygen -lf "${keys[i]}.pub" | awk '{c=""; for (j=3; j<NF; j++) c=c" "$j; printf "%-9s %s%s", $NF, $2, c}')"
@@ -205,18 +228,28 @@ choose_key() {
   case "$want" in
     none) KEY_KIND=none KEY_PATH=none KEY_NAME="" ;;
     new)  KEY_KIND=disposable KEY_PATH="$KEYS_DIR/$SB_NAME" KEY_NAME=sandbox_key ;;
-    *)    [[ "$want" == */* ]] || want="$HOME/.ssh/$want"
+    *)    [[ -n "$AGENT_OK" ]] \
+            || die "keys from ~/.ssh can't be used here: $NO_AGENT_WHY, so the key would have to be copied into the sandbox, which opencode-sandbox never does; use -k new (a disposable key) or -k none"
+          [[ "$want" == */* ]] || want="$HOME/.ssh/$want"
           [[ -f "$want" && -f "$want.pub" ]] || die "no key pair at $want (+ .pub)"
           KEY_KIND=home KEY_PATH="$(readlink -f "$want")" KEY_NAME="${want##*/}" ;;
+  esac
+  case "$KEY_KIND" in
+    none) KEY_MODE=none ;;
+    home) KEY_MODE=agent ;;
+    *)    if [[ -n "$AGENT_OK" ]]; then KEY_MODE=agent; else KEY_MODE=file; fi ;;
   esac
   [[ "$KEY_NAME" =~ ^[A-Za-z0-9._@+-]*$ && "$KEY_PATH" != *,* ]] || die "unsupported key path: $KEY_PATH"
 }
 
 new_disposable_key() {
-  install -d -m 700 "$KEYS_DIR"
+  install -d -m 700 "$KEYS_DIR"; chmod 700 "$KEYS_DIR"
   [[ ! -e "$KEY_PATH" && ! -e "$KEY_PATH.pub" ]] \
     || die "a disposable key '$SB_NAME' already exists in $KEYS_DIR (left from a deleted sandbox?); delete it first"
   ssh-keygen -q -t ed25519 -N '' -C "opencode-sandbox-$SB_NAME-$(date +%F)" -f "$KEY_PATH" </dev/null
+  # Mounted into the sandbox as a file in file mode: readable there even where
+  # Docker maps your files to another uid; ./keys stays user-only here.
+  [[ "$KEY_MODE" != file ]] || chmod 644 "$KEY_PATH"
 }
 
 discard_key() {  # delete a disposable key pair; never touches anything outside ./keys
@@ -227,8 +260,13 @@ discard_key() {  # delete a disposable key pair; never touches anything outside 
 show_new_key() {
   {
     echo
-    echo "Sandbox '$SB_NAME' has a new disposable SSH key. The private part stays on this"
-    echo "machine in $KEYS_DIR (never inside the sandbox) and is deleted with the sandbox."
+    if [[ "$KEY_MODE" == file ]]; then
+      echo "Sandbox '$SB_NAME' has a new disposable SSH key. Its private part is stored INSIDE the sandbox, because $NO_AGENT_WHY: anything running there can read and copy it. Authorize it only where that's acceptable, and remove it from authorized_keys when you delete the sandbox. A copy is kept in $KEYS_DIR; both are deleted with the sandbox." \
+        | fold -s -w 78
+    else
+      echo "Sandbox '$SB_NAME' has a new disposable SSH key. The private part stays on this"
+      echo "machine in $KEYS_DIR (never inside the sandbox) and is deleted with the sandbox."
+    fi
     echo "Authorize it where the sandbox may log in, e.g. in ~/.ssh/authorized_keys on the server:"
     echo
     cat "$KEY_PATH.pub"
@@ -315,9 +353,13 @@ write_config() {  # $1 sandbox, $2 comma-separated providers
   (( ${#have[@]} )) || die "none of sandbox '$1''s providers ($2) are in $CONFIG any more"
   keep="$(printf '%s\n' "${have[@]}" | jq -R . | jq -cs .)"
   out="$(config_file "$1")"
-  install -d -m 700 "$RUNDIR" "$RUNDIR/configs"
+  ensure_rundir
+  install -d -m 700 "$RUNDIR/configs"
   ( umask 077; jq --argjson keep "$keep" "$CONFIG_FILTER" "$CONFIG" >"$out.tmp" ) \
     || die "could not filter $CONFIG"
+  # Readable in the container even where Docker maps your files to another uid
+  # (rootless); on this machine the user-only directory keeps it private.
+  chmod 644 "$out.tmp"
   mv -f "$out.tmp" "$out"
 }
 
@@ -380,12 +422,17 @@ default_name() {
 create_sandbox() {
   local name="$1" cname="$PREFIX$1"; shift
   local -a ssh=()
-  if [[ "$KEY_KIND" != none ]]; then
-    ssh=(-e SSH_AUTH_SOCK=/run/ssh-agent/ssh-agent.sock
-         --mount "type=bind,src=$(agent_dir "$name")/sock,dst=/run/ssh-agent,readonly"
-         --mount "type=bind,src=$KEY_PATH.pub,dst=/home/agent/.ssh/$KEY_NAME,readonly"
-         --mount "type=bind,src=$KEY_PATH.pub,dst=/home/agent/.ssh/$KEY_NAME.pub,readonly")
-  fi
+  case "$KEY_MODE" in
+    agent) ssh=(-e SSH_AUTH_SOCK=/run/ssh-agent/ssh-agent.sock
+                --mount "type=bind,src=$(agent_dir "$name")/sock,dst=/run/ssh-agent,readonly"
+                --mount "type=bind,src=$KEY_PATH.pub,dst=/home/agent/.ssh/$KEY_NAME,readonly"
+                --mount "type=bind,src=$KEY_PATH.pub,dst=/home/agent/.ssh/$KEY_NAME.pub,readonly") ;;
+    # No host agent possible: the disposable key goes in as a file, and
+    # entrypoint.sh loads it into an agent inside the sandbox (for ssh -A).
+    file)  ssh=(-e SSH_AUTH_SOCK=/tmp/ssh-agent.sock
+                --mount "type=bind,src=$KEY_PATH,dst=/run/opencode-sandbox/key,readonly"
+                --mount "type=bind,src=$KEY_PATH.pub,dst=/run/opencode-sandbox/key.pub,readonly") ;;
+  esac
 
   # Hardening: immutable rootfs, no capabilities, no privilege escalation, and
   # only the variables below. Your host SSH_AUTH_SOCK is NOT passed through.
@@ -393,6 +440,7 @@ create_sandbox() {
   docker create "$TTY" --name "$cname" \
     --label "$LABEL=$name" --label "opencode-sandbox.source=$WORKSPACE" \
     --label "opencode-sandbox.keykind=$KEY_KIND" --label "opencode-sandbox.key=$KEY_PATH" \
+    --label "opencode-sandbox.keymode=$KEY_MODE" \
     --init --read-only --cap-drop ALL --security-opt no-new-privileges:true \
     --pids-limit 1024 --tmpfs /tmp:exec,size=1g,mode=1777 \
     --network "$NETWORK" \
@@ -427,9 +475,14 @@ open_sandbox() {
   wait "$pid" || rc=$?
   if [[ -n "$hangup" ]]; then
     kill "$pid" 2>/dev/null || true
-    # Detached, so it completes even if this launcher is killed next.
-    setsid -f bash -c 'docker stop -t 5 "$1"; [[ -s "$2/ssh-agent.pid" ]] && kill "$(cat "$2/ssh-agent.pid")"; rm -rf -- "$2"' \
-      _ "$PREFIX$1" "$(agent_dir "$1")" </dev/null >/dev/null 2>&1
+    # Detached, so it completes even if this launcher is killed next. Without
+    # setsid (macOS), a subshell that ignores the terminal's signals does it.
+    local cleanup='docker stop -t 5 "$1"; [[ -s "$2/ssh-agent.pid" ]] && kill "$(cat "$2/ssh-agent.pid")"; rm -rf -- "$2"'
+    if command -v setsid >/dev/null; then
+      setsid -f bash -c "$cleanup" _ "$PREFIX$1" "$(agent_dir "$1")" </dev/null >/dev/null 2>&1
+    else
+      ( trap '' HUP TERM INT; exec bash -c "$cleanup" _ "$PREFIX$1" "$(agent_dir "$1")" ) </dev/null >/dev/null 2>&1 &
+    fi
     exit 129
   fi
   trap - HUP TERM
@@ -439,7 +492,7 @@ open_sandbox() {
 
 list_sandboxes() {
   local numbered="${1:-}" rows
-  rows="$(docker ps -a --filter "label=$LABEL" --format "{{.Label \"$LABEL\"}}\t{{.Label \"opencode-sandbox.keykind\"}}\t{{.Label \"opencode-sandbox.key\"}}\t{{.Status}}\t{{.RunningFor}}\t{{.Label \"opencode-sandbox.source\"}}\t{{.Label \"opencode-sandbox.providers\"}}")"
+  rows="$(docker ps -a --filter "label=$LABEL" --format "{{.Label \"$LABEL\"}}\t{{.Label \"opencode-sandbox.keykind\"}}\t{{.Label \"opencode-sandbox.key\"}}\t{{.Status}}\t{{.RunningFor}}\t{{.Label \"opencode-sandbox.source\"}}\t{{.Label \"opencode-sandbox.providers\"}}\t{{.Label \"opencode-sandbox.keymode\"}}")"
   if [[ -z "$rows" ]]; then echo "no sandboxes"; return; fi
   sed -E 's/\tUp ([^\t]*)/\topen (\1)/; s/\tExited \([0-9-]+\) /\tclosed /; s/\tCreated\t/\tnew\t/
           s/Less than a second( ago)?/just now/g; s/About an? (minute|hour)/1 \1/g; s/just now ago/just now/g' <<<"$rows" \
@@ -447,8 +500,10 @@ list_sandboxes() {
         function row(num, a, b, c, d, e, f) { printf "%s%-22s %-13s %-20s %-22s %-15s %s\n", num, a, b, c, d, e, f }
         BEGIN { row(n ? "#   " : "", "NAME", "SSH KEY", "PROVIDER", "STATE", "CREATED", "COPIED FROM") }
         { key = ($2 == "home") ? $3 : $2; sub(/.*\//, "", key)
+          if ($8 == "file") { key = key "*"; inside = 1 }
           prov = ($7 == "") ? "all (old sandbox)" : $7
-          row(n ? sprintf("%-3d ", NR) : "", $1, key, prov, $4, $5, $6) }'
+          row(n ? sprintf("%-3d ", NR) : "", $1, key, prov, $4, $5, $6) }
+        END { if (inside) print "* private key stored inside the sandbox (no host ssh-agent on this setup)" }'
 }
 
 pick_sandbox() {
@@ -493,21 +548,30 @@ abandon_sandbox() {  # undo a half-finished creation
   return 0
 }
 
-# The design needs a Docker Engine running directly on this Linux machine, as
-# you: each sandbox connects to an ssh-agent socket on the host, and that agent
-# only serves processes with your uid. Refuse clearly where that can't work.
+# Each sandbox normally reaches its key through an ssh-agent socket on this
+# machine, which only serves your uid. Where Docker runs containers in a VM
+# (macOS, Windows, Docker Desktop) or under another uid (rootless Docker,
+# userns-remap) that can't work: there AGENT_OK is empty and sandboxes get only
+# a disposable key stored inside them, or none. Hard requirements still die.
 check_platform() {
-  local os sec
-  [[ "$(uname -s)" == Linux ]] \
-    || die "only Linux is supported: on $(uname -s), Docker runs containers in a VM, which can't reach the per-sandbox ssh-agent sockets on your machine"
+  local info
+  (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) )) \
+    || die "needs bash 4.4 or newer, this is $BASH_VERSION (on macOS: brew install bash)"
+  command -v jq >/dev/null || die "needs jq (e.g. apt install jq, or brew install jq)"
   (( "$(id -u)" != 0 )) || die "don't run opencode-sandbox as root; sandboxes run with your uid"
-  os="$(docker info --format '{{.OperatingSystem}}' 2>/dev/null)" \
+  info="$(docker info --format '{{.OperatingSystem}}|{{json .SecurityOptions}}' 2>/dev/null)" \
     || die "can't reach Docker; is it running, and may you use it (e.g. are you in the docker group)?"
-  [[ "$os" != *"Docker Desktop"* ]] \
-    || die "Docker Desktop isn't supported: it runs containers in a VM, which can't reach the per-sandbox ssh-agent sockets on your machine; use Docker Engine"
-  sec="$(docker info --format '{{json .SecurityOptions}}' 2>/dev/null)"
-  [[ "$sec" != *rootless* && "$sec" != *userns* ]] \
-    || die "rootless Docker and userns-remap aren't supported: sandboxes must run with your uid for their ssh-agent to accept them"
+  AGENT_OK=1 NO_AGENT_WHY=""
+  if [[ -n "${OPENCODE_SANDBOX_NO_AGENT:-}" && "${OPENCODE_SANDBOX_NO_AGENT}" != 0 ]]; then
+    NO_AGENT_WHY="OPENCODE_SANDBOX_NO_AGENT is set"
+  elif [[ "$(uname -s)" != Linux ]]; then
+    NO_AGENT_WHY="on $(uname -s | sed 's/^Darwin$/macOS/'), Docker runs containers in a VM that can't reach an ssh-agent on this machine"
+  elif [[ "${info%%|*}" == *"Docker Desktop"* ]]; then
+    NO_AGENT_WHY="Docker Desktop runs containers in a VM that can't reach an ssh-agent on this machine"
+  elif [[ "${info#*|}" == *rootless* || "${info#*|}" == *userns* ]]; then
+    NO_AGENT_WHY="with rootless Docker or userns-remap, sandboxes don't run with your uid, so an ssh-agent on this machine won't serve them"
+  fi
+  [[ -z "$NO_AGENT_WHY" ]] || AGENT_OK=""
 }
 
 # --- main --------------------------------------------------------------------
@@ -554,7 +618,14 @@ case "${1:-}" in
     name="${2:-}"; [[ -n "$name" ]] || name="$(pick_sandbox)"
     exists "$name" || die "no sandbox named '$name' (see --list)"
     prepare
-    [[ "$(label "$name" keykind)" == none ]] || ensure_agent "$name" "$(label "$name" key)"
+    mode="$(label "$name" keymode)"
+    if [[ -z "$mode" ]]; then  # created before 0.2.0
+      if [[ "$(label "$name" keykind)" == none ]]; then mode=none; else mode=agent; fi
+    fi
+    if [[ "$mode" == agent ]]; then
+      [[ -n "$AGENT_OK" ]] || die "sandbox '$name' uses an ssh-agent on this machine, which isn't possible here: $NO_AGENT_WHY"
+      ensure_agent "$name" "$(label "$name" key)"
+    fi
     if [[ "$(state "$name")" != running ]]; then
       provs="$(label "$name" providers)"
       if [[ -n "$provs" ]]; then write_config "$name" "$provs"
@@ -593,7 +664,7 @@ prepare
 trap '[[ -n "${CREATED:-}" ]] || abandon_sandbox' EXIT
 write_config "$name" "$PROVIDERS"
 [[ "$KEY_KIND" == disposable ]] && new_disposable_key && KEY_CREATED=1
-[[ "$KEY_KIND" == none ]] || ensure_agent "$name" "$KEY_PATH"
+[[ "$KEY_MODE" != agent ]] || ensure_agent "$name" "$KEY_PATH"
 create_sandbox "$name" "$@"
 CREATED=1
 [[ "$KEY_KIND" == disposable ]] && show_new_key
