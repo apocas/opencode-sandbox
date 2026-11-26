@@ -18,7 +18,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-VERSION="0.1.0"  # bump with each release, see CHANGELOG.md
+VERSION="0.1.1"  # bump with each release, see CHANGELOG.md
 # Tagged with the launcher's version, so after an update the next run builds
 # the matching image by itself.
 IMAGE="opencode-sandbox:$VERSION"
@@ -493,6 +493,23 @@ abandon_sandbox() {  # undo a half-finished creation
   return 0
 }
 
+# The design needs a Docker Engine running directly on this Linux machine, as
+# you: each sandbox connects to an ssh-agent socket on the host, and that agent
+# only serves processes with your uid. Refuse clearly where that can't work.
+check_platform() {
+  local os sec
+  [[ "$(uname -s)" == Linux ]] \
+    || die "only Linux is supported: on $(uname -s), Docker runs containers in a VM, which can't reach the per-sandbox ssh-agent sockets on your machine"
+  (( "$(id -u)" != 0 )) || die "don't run opencode-sandbox as root; sandboxes run with your uid"
+  os="$(docker info --format '{{.OperatingSystem}}' 2>/dev/null)" \
+    || die "can't reach Docker; is it running, and may you use it (e.g. are you in the docker group)?"
+  [[ "$os" != *"Docker Desktop"* ]] \
+    || die "Docker Desktop isn't supported: it runs containers in a VM, which can't reach the per-sandbox ssh-agent sockets on your machine; use Docker Engine"
+  sec="$(docker info --format '{{json .SecurityOptions}}' 2>/dev/null)"
+  [[ "$sec" != *rootless* && "$sec" != *userns* ]] \
+    || die "rootless Docker and userns-remap aren't supported: sandboxes must run with your uid for their ssh-agent to accept them"
+}
+
 # --- main --------------------------------------------------------------------
 
 case "${1:-}" in
@@ -500,6 +517,11 @@ case "${1:-}" in
   -V|--version)
     echo "opencode-sandbox $VERSION (opencode $(sed -n 's/^ARG OPENCODE_VERSION=//p' "$HERE/Dockerfile"))"
     exit ;;
+esac
+
+check_platform
+
+case "${1:-}" in
   --build)  shift; build_image "$@"; exit ;;
   --list)   gc_agents; list_sandboxes; exit ;;
   --rm)     shift; remove_sandboxes "$@"; exit ;;

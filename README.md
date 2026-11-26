@@ -33,9 +33,14 @@ down:
 
 ## Requirements
 
-- Linux with Docker Engine, rootful. Rootless Docker, userns-remap and Docker
-  Desktop aren't supported: the container has to run as your uid for the
-  host ssh-agent to accept it.
+- **Linux** with Docker Engine (rootful), used as a regular user.
+- **Not supported:** the launcher checks for these and stops with an explanation.
+  - macOS and Windows, and Docker Desktop on any OS. They run containers in a
+    VM, and a container in that VM can't connect to the per-sandbox ssh-agent
+    sockets on your machine. Docker Desktop's built-in SSH passthrough forwards
+    your *main* agent, with all its keys, which is what this tool avoids.
+  - Rootless Docker and userns-remap. The container has to run as your uid for
+    its ssh-agent to accept it.
 - bash 4.4+, the OpenSSH client tools (`ssh-agent`, `ssh-add`, `ssh-keygen`),
   `jq`, GNU coreutils.
 - An opencode config at `~/.config/opencode/opencode.json` (plain JSON) with

@@ -27,7 +27,15 @@ RUN case "${TARGETARCH:-amd64}" in \
  && chown root:root /usr/local/bin/opencode && chmod 755 /usr/local/bin/opencode \
  && rm /tmp/opencode.tar.gz
 
-RUN groupadd -g "${GID}" agent \
+# Your gid may already exist in Debian (e.g. 20 "dialout", which is macOS's
+# "staff", or 100 "users"): that group is then renamed to agent. A uid that
+# belongs to a system user is refused rather than shared.
+RUN if g="$(getent group "${GID}")"; then groupmod -n agent "${g%%:*}"; \
+    else groupadd -g "${GID}" agent; fi \
+ && if u="$(getent passwd "${UID}")"; then \
+      echo "uid ${UID} is the image's '${u%%:*}' user; run opencode-sandbox as a regular user" >&2; \
+      exit 1; \
+    fi \
  && useradd -m -u "${UID}" -g "${GID}" -s /bin/bash agent \
  && install -d -o agent -g agent -m 700 /home/agent/.ssh \
  && install -d -o agent -g agent \

@@ -4,6 +4,22 @@ All notable changes to opencode-sandbox. Versions follow
 [Semantic Versioning](https://semver.org); each release is tagged `vX.Y.Z`.
 To update, see [Updating](README.md#updating).
 
+## [0.1.1] - 2026-11-26
+
+### Fixed
+
+- The image failed to build when your gid already exists in Debian, for
+  example macOS's gid 20 or gid 100 (`users`) on some Linux systems. That group
+  is now reused. A uid that belongs to a system user is refused with a clear
+  message.
+
+### Added
+
+- The launcher now stops with an explanation on setups it can't support:
+  macOS and other non-Linux systems, Docker Desktop, rootless Docker,
+  userns-remap, running as root, and Docker not being reachable. `--help` and
+  `--version` still work everywhere.
+
 ## [0.1.0] - 2026-11-26
 
 First release.
@@ -30,4 +46,5 @@ First release.
   `--resume` warns about sandboxes created by an older version.
 - Bundles opencode 2.4.2 (x86_64 and arm64 builds, checksums verified).
 
+[0.1.1]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.1.1
 [0.1.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.1.0
