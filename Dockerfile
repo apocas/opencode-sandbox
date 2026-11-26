@@ -40,6 +40,13 @@ COPY --chmod=755 entrypoint.sh /usr/local/bin/agent-entrypoint
 # SSH_AUTH_SOCK is set per sandbox by the launcher, only when it has a key.
 ENV OPENCODE_DISABLE_AUTOUPDATE=1
 
+# Last, so a new launcher version doesn't invalidate the layers above.
+ARG OPENCODE_SANDBOX_VERSION=dev
+LABEL org.opencontainers.image.title="opencode-sandbox" \
+      org.opencontainers.image.version="${OPENCODE_SANDBOX_VERSION}" \
+      org.opencontainers.image.source="https://github.com/apocas/opencode-sandbox" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
 USER agent
 WORKDIR /workspace
 ENTRYPOINT ["/usr/local/bin/agent-entrypoint"]

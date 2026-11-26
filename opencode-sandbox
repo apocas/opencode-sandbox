@@ -18,7 +18,10 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-IMAGE="opencode-sandbox:2.4.2"
+VERSION="0.1.0"  # bump with each release, see CHANGELOG.md
+# Tagged with the launcher's version, so after an update the next run builds
+# the matching image by itself.
+IMAGE="opencode-sandbox:$VERSION"
 NETWORK="opencode-sandbox-net"
 PREFIX="opencode-sandbox-"
 LABEL="opencode-sandbox.name"
@@ -79,6 +82,7 @@ Commands:
   --stop-agent    stop all sandbox ssh-agents (cuts SSH for open sandboxes)
   --build [ARGS]  rebuild the image (extra ARGS go to docker build);
                   existing sandboxes keep the image they were created with
+  -V, --version   show the opencode-sandbox and opencode versions
   -h, --help      show this help
 
 Environment:
@@ -329,7 +333,8 @@ seed_known_hosts() {
 }
 
 build_image() {
-  docker build -t "$IMAGE" --build-arg UID="$(id -u)" --build-arg GID="$(id -g)" "$@" "$HERE"
+  docker build -t "$IMAGE" --build-arg UID="$(id -u)" --build-arg GID="$(id -g)" \
+    --build-arg OPENCODE_SANDBOX_VERSION="$VERSION" "$@" "$HERE"
 }
 
 # Everything a sandbox needs on the host before it is created or resumed.
@@ -394,7 +399,7 @@ create_sandbox() {
     -e TERM="${TERM:-xterm-256color}" -e COLORTERM="${COLORTERM:-}" \
     --mount type=volume,dst=/home/agent \
     --mount type=volume,dst=/workspace \
-    --label "opencode-sandbox.providers=$PROVIDERS" \
+    --label "opencode-sandbox.providers=$PROVIDERS" --label "opencode-sandbox.version=$VERSION" \
     --mount "type=bind,src=$(config_file "$name"),dst=/home/agent/.config/opencode/opencode.json,readonly" \
     --mount "type=bind,src=$HERE/known_hosts,dst=/etc/ssh/ssh_known_hosts,readonly" \
     "${ssh[@]}" \
@@ -492,6 +497,9 @@ abandon_sandbox() {  # undo a half-finished creation
 
 case "${1:-}" in
   -h|--help) usage; exit ;;
+  -V|--version)
+    echo "opencode-sandbox $VERSION (opencode $(sed -n 's/^ARG OPENCODE_VERSION=//p' "$HERE/Dockerfile"))"
+    exit ;;
   --build)  shift; build_image "$@"; exit ;;
   --list)   gc_agents; list_sandboxes; exit ;;
   --rm)     shift; remove_sandboxes "$@"; exit ;;
@@ -530,6 +538,8 @@ case "${1:-}" in
       if [[ -n "$provs" ]]; then write_config "$name" "$provs"
       else note "sandbox '$name' predates provider selection and sees all your providers; recreate it to limit them"; fi
     fi
+    v="$(label "$name" version)"
+    [[ "$v" == "$VERSION" ]] || note "sandbox '$name' was created by opencode-sandbox ${v:-before 0.1.0} (you have $VERSION) and keeps its original image and settings; create a new sandbox to get the update"
     open_sandbox "$name"; exit ;;
   -*) [[ "$1" == -w || "$1" == -n || "$1" == -k || "$1" == -p || "$1" == -- ]] \
         || die "unknown option: $1 (see: opencode-sandbox --help)" ;;

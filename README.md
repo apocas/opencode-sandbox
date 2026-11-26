@@ -50,8 +50,38 @@ Dockerfile also handles arm64 Linux, but that hasn't been tested yet.
 ```bash
 git clone https://github.com/apocas/opencode-sandbox.git
 ln -s "$PWD/opencode-sandbox/opencode-sandbox" ~/.local/bin/opencode-sandbox
-opencode-sandbox --build    # optional: the first run builds the image anyway
+opencode-sandbox --version
 ```
+
+The first run builds the Docker image (or run `opencode-sandbox --build`). To
+install a specific release rather than the latest code, add `--branch v0.1.0`
+to the `git clone`.
+
+## Updating
+
+Releases follow [Semantic Versioning](https://semver.org) and are tagged
+`vX.Y.Z`; see [CHANGELOG.md](CHANGELOG.md) for what changed in each.
+`opencode-sandbox --version` shows your version and the opencode release it
+bundles.
+
+```bash
+cd /path/to/opencode-sandbox           # your clone
+git checkout master && git pull        # the latest code
+# or a specific release:
+git fetch --tags && git checkout v0.2.0
+opencode-sandbox --version
+```
+
+- The next run builds the image for the new version by itself (or run
+  `opencode-sandbox --build`). Your `keys/` and `known_hosts` are untouched,
+  since git ignores them.
+- Sandboxes you already have keep the image and settings they were created
+  with; `--resume` tells you when a sandbox is older than the launcher. To move
+  to the new version, create a new sandbox and delete the old one with `--rm`.
+- Check the changelog before updating for anything you need to do.
+- Old images stay on disk: list them with `docker image ls opencode-sandbox`
+  and remove one with `docker image rm opencode-sandbox:OLD_VERSION` once no
+  sandbox uses it (Docker refuses while one does).
 
 ## Quick start
 
@@ -172,6 +202,16 @@ opencode-sandbox --build --build-arg OPENCODE_VERSION=X.Y.Z \
 ```
 
 Existing sandboxes keep the image they were created with.
+
+## Releasing
+
+1. Bump `VERSION` at the top of `opencode-sandbox` and add a section to
+   `CHANGELOG.md`.
+2. To bundle a newer opencode, update `OPENCODE_VERSION` and both checksums in
+   the `Dockerfile`.
+3. Commit, tag and push:
+   `git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin master vX.Y.Z`, then
+   create the GitHub release from that tag.
 
 ## License
 
