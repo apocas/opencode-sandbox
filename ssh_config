@@ -1,0 +1,9 @@
+# No private key exists in this container. If the sandbox was given a key, the
+# host runs an ssh-agent for it holding only that one key, reached via
+# $SSH_AUTH_SOCK; its public half is in ~/.ssh under the key's own name, so
+# `ssh -i ~/.ssh/<name> ...` works unchanged and -A forwards only that key.
+Host *
+    # Seeded host keys live in /etc/ssh/ssh_known_hosts (read-only); unknown
+    # hosts are learned on first use, changed keys are refused.
+    StrictHostKeyChecking accept-new
+    ServerAliveInterval 30
