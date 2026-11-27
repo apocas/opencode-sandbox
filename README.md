@@ -5,6 +5,13 @@ or on a Mac a VM for each sandbox with Apple's `container`) where the agent can
 use **exactly one SSH key** (or none), works on a **copy** of your files, and
 only talks to the **LLM provider you pick**.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/overview-dark.svg">
+    <img src="docs/overview-light.svg" width="880" alt="Of your folders, SSH keys and LLM providers, a sandbox gets a copy of one folder, a new disposable key of its own instead of any of yours, and the providers you pick; the rest stays out. The wall around it is a hardened Docker container, or after `opencode-sandbox setup` a gVisor kernel of its own on Linux or an Apple container VM of its own on a Mac.">
+  </picture>
+</p>
+
 Coding agents are most useful when they can run commands, including `ssh` into
 your servers. That also means a confused or prompt-injected agent can use every
 key in your ssh-agent, read anything in your home directory, and send your code
