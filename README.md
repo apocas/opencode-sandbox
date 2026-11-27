@@ -30,7 +30,8 @@ down:
   with the sandbox. On macOS and Docker Desktop, where a sandbox can't reach an
   ssh-agent on your machine, these are what you get (see [Platforms](#platforms)).
 - **Your files are copied, not mounted.** The sandbox gets a snapshot of a
-  folder. Nothing the agent writes reaches the original.
+  folder. Nothing the agent writes reaches the original. The dot files in it
+  that may hold secrets (`.env`, `.npmrc`…) are named before they're copied.
 - **Only the providers you choose.** Each sandbox gets a filtered copy of your
   opencode config with just the selected provider(s). opencode's built-in
   providers (such as its free hosted models) are switched off.
@@ -92,7 +93,8 @@ the provider.
   provider's API, when that header is the token. The headers your config sets
   under `options.headers` are kept back and put in the same way. Nothing is
   swapped in a request's body or address, so a model can't be asked to say a
-  key back.
+  key back. Only `GET`, `HEAD` and `POST` requests are passed on: not `TRACE`,
+  which makes a server send a request back, nor `DELETE` and the like.
 - **`{env:NAME}` and `{file:PATH}`** in a key are resolved on your machine,
   where the variable or file is.
 - **A changed config is picked up while a sandbox is open:** rotate a key and
@@ -103,8 +105,14 @@ your config, or for `anthropic`, `openai`, `google`, `groq`, `mistral`, `xai`
 and `openrouter` (or their `npm` packages) from their well-known addresses.
 For any other provider without a `baseURL`, opencode-sandbox tells you when
 the sandbox starts and puts that key into its config, as it did before 0.9.0.
-`ls` marks such sandboxes, and those made before 0.9.0, with `*` after the
-provider; `health` names the providers concerned.
+
+The gateway keeps `options.apiKey` and `options.headers`. A secret under
+another name, such as a cloud's `secretAccessKey` or a header of a single
+model, still goes into the sandbox's config, and opencode-sandbox tells you
+so too.
+
+`ls` marks the sandboxes with a secret in their config, and those made before
+0.9.0, with `*` after the provider; `health` says which providers and why.
 
 `OPENCODE_SANDBOX_GATEWAY=off` creates sandboxes without a gateway, with the
 keys in their config.
@@ -227,7 +235,7 @@ Other ways:
 check it against `SHA256SUMS`, and put it on your `PATH`:
 
 ```bash
-v=0.9.0 os=$(uname -s | tr A-Z a-z) arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+v=0.9.1 os=$(uname -s | tr A-Z a-z) arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 f=opencode-sandbox_${v}_${os}_${arch}
 curl -fLO https://github.com/apocas/opencode-sandbox/releases/download/v$v/$f
 curl -fL https://github.com/apocas/opencode-sandbox/releases/download/v$v/SHA256SUMS | grep " $f\$" | shasum -a 256 -c
@@ -275,12 +283,15 @@ clone:
 cd /path/to/opencode-sandbox           # your clone
 git checkout master && git pull        # the latest code
 # or a specific release:
-git fetch --tags && git checkout v0.9.0
+git fetch --tags && git checkout v0.9.1
 opencode-sandbox version
 ```
 
 - The next run builds the image for the new version by itself (or run
   `opencode-sandbox build`).
+- **Coming from 0.9.0:** update. Its gateway passed on any kind of request,
+  `TRACE` among them, which a provider's API that answers it sends back with
+  the key in it (see the [changelog](CHANGELOG.md)).
 - **Coming from 0.8 or earlier:** new sandboxes no longer get your providers'
   API keys ([API keys](#api-keys)). The sandboxes you already have keep the
   key in their config: `ls` marks them with `*`. Create new ones to get it
@@ -499,6 +510,10 @@ In the sandbox:
   credit with them, for as long as it's open. It can't read their keys, with
   two exceptions: a provider the gateway can't serve, and sandboxes made
   before 0.9.0 ([API keys](#api-keys)).
+- **Secrets in the folder you copy go in with it**: a `.env`, an `.npmrc`, a
+  token in `.git/config`. `new` and `cp` name the dot files that may hold
+  some (all but the likes of `.gitignore`) before copying, and on a terminal
+  `new` waits for you; what's in other files, they can't tell.
 - **Other secrets in your opencode config are copied as they are**, such as an
   MCP server's token. Only a provider's `options.apiKey` and `options.headers`
   stay behind the gateway.

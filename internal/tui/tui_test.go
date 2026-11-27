@@ -393,3 +393,40 @@ func TestArrowsMoveWhileFiltering(t *testing.T) {
 		t.Errorf("down while filtering: filtering %v, cursor %d", m.filtering, m.cursor)
 	}
 }
+
+// The form says which dot files of the folder typed are copied too.
+func TestFormNamesDotFiles(t *testing.T) {
+	dir := t.TempDir()
+	dir, _ = filepath.EvalSymlinks(dir)
+	for _, f := range []string{".env", ".npmrc", ".gitignore"} {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(dir)
+	m := withForm(t)
+	if got, want := m.nf.about(m.c), "copied into /workspace, never mounted\nits dot files too, which often hold secrets: .env · .npmrc"; got != want {
+		t.Errorf("about the folder: %q, want %q", got, want)
+	}
+	raw := screen(t, m, 110, 32)
+	out := strings.Join(strings.Fields(strings.ReplaceAll(raw, "┃", " ")), " ")
+	if !strings.Contains(out, "never mounted its dot files too, which often hold secrets: .env · .npmrc >") || strings.Contains(out, ".gitignore") {
+		t.Errorf("the form doesn't name them:\n%s", raw)
+	}
+	if os.Getenv("SHOW") != "" {
+		t.Log("\n" + raw)
+	}
+	// A folder without any: only what happens to it.
+	clean := filepath.Join(dir, "src")
+	if err := os.Mkdir(clean, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m.nf.folder = clean
+	if got := m.nf.about(m.c); got != "copied into /workspace, never mounted" {
+		t.Errorf("a folder without dot files: %q", got)
+	}
+	m.nf.folder = filepath.Join(dir, "nope")
+	if got := m.nf.about(m.c); got != "copied into /workspace, never mounted" {
+		t.Errorf("a folder that isn't there: %q", got)
+	}
+}

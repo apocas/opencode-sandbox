@@ -201,6 +201,11 @@ func (a *Core) CopyIn(name string, paths []string, done func(src string)) error 
 			return err
 		}
 	}
+	for _, src := range paths {
+		if w := a.DotFiles(src).Warning(src); w != "" {
+			a.Rep.Warn(w)
+		}
+	}
 	undo, err := a.mountable(e, name)
 	if err != nil {
 		return err

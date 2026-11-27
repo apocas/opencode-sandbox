@@ -27,7 +27,8 @@ var commands = []command{
 Creates a NEW sandbox with a copy of DIR (default: the current folder) in
 /workspace, and opens opencode in it. DIR is copied, never mounted, so nothing
 the agent does reaches it. Your home folder, ~/.ssh and opencode-sandbox's own
-data are refused.
+data are refused. Dot files in DIR that may hold secrets (.env, .npmrc…) are
+copied like the rest: they're named first, and on a terminal you're asked.
 
   -n NAME      sandbox name (default: the folder's name plus a random suffix)
   -k KEY       the one SSH key the sandbox may use (asked if omitted):

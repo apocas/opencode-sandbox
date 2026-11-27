@@ -133,7 +133,7 @@ func APIKeys(s core.Sandbox) string {
 	case !s.APIKeysInside:
 		return "none"
 	case s.Gateway:
-		return "inside the sandbox for a provider whose API's address your opencode config doesn't give; the rest on this machine"
+		return "inside the sandbox for a provider the gateway can't keep them for (see opencode-sandbox health); the rest on this machine"
 	}
 	return "inside the sandbox (it has no gateway)"
 }

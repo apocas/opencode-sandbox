@@ -165,6 +165,44 @@ func TestProxyPaths(t *testing.T) {
 	}
 }
 
+// Only what talking to a model takes is passed on. TRACE in particular makes
+// a server send the request back, key and all.
+func TestProxyMethods(t *testing.T) {
+	asked := 0
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked++
+		fmt.Fprintf(w, "%s %s", r.Method, r.Header.Get("Authorization")) // an echo, as TRACE is
+	}))
+	defer up.Close()
+	gw := httptest.NewServer(proxyFor(up.URL+"/v1", Route{Key: "REAL"}))
+	defer gw.Close()
+	do := func(method string) (int, string) {
+		req, _ := http.NewRequest(method, gw.URL+"/p1/x", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body)
+	}
+	for _, m := range []string{"TRACE", "DELETE", "PUT", "PATCH", "OPTIONS", "CONNECT", "PROPFIND", "get"} {
+		code, body := do(m)
+		if code != 405 || strings.Contains(body, "REAL") || !strings.Contains(body, "GET, HEAD and POST") {
+			t.Errorf("%s: %d %q, want it refused", m, code, body)
+		}
+	}
+	if asked != 0 {
+		t.Errorf("the provider was asked %d times", asked)
+	}
+	for _, m := range []string{"GET", "POST", "HEAD"} {
+		if code, body := do(m); code != 200 || m != "HEAD" && body != m+" Bearer REAL" {
+			t.Errorf("%s: %d %q", m, code, body)
+		}
+	}
+}
+
 func TestProxyProviderDown(t *testing.T) {
 	p := proxyFor("http://127.0.0.1:1/v1", Route{Key: "REAL"})
 	gw := httptest.NewServer(p)
@@ -448,9 +486,13 @@ func TestRoutes(t *testing.T) {
 		"relative":  {"options":{"baseURL":"/v1","apiKey":"k"}},
 		"keyless":   {"options":{"baseURL":"http://localhost:11434/v1"}},
 		"odd":       "not an object",
-		"oddopts":   {"options":"not an object"}
+		"oddopts":   {"options":"not an object"},
+		"aws":       {"npm":"@ai-sdk/amazon-bedrock","options":{"region":"eu-west-1","accessKeyId":"AKIAEXAMPLE","secretAccessKey":"S1","sessionToken":"S2"}},
+		"both":      {"options":{"baseURL":"https://x.example","apiKey":"k","clientSecret":"S3","nested":{"private_key":"S4","list":[{"password":"S5"}]},"one":"1","more":{"token":"S6"}}},
+		"models":    {"options":{"baseURL":"https://x.example","apiKey":"k"},"models":{"m1":{"headers":{"Authorization":"Bearer S7","anthropic-beta":"x"}},"m2":{"options":{"apiKey":"S8"}},"m3":"odd"}},
+		"pointers":  {"options":{"baseURL":"https://x.example","apiKey":"k","keyFile":"/k.json","apiKeyEnv":"MY_KEY","accessKeyId":"AKIA","tokenUrl":"https://t.example","publicKey":"pk","maxTokens":5,"secretAccessKey":"{env:AWS_SECRET}","empty_token":""}}
 	}}`)
-	ids := []string{"plain", "env", "unset", "file", "home", "headers", "api", "anthropic", "mine", "unknown", "nowhere", "badurl", "relative", "keyless", "odd", "oddopts", "missing"}
+	ids := []string{"plain", "env", "unset", "file", "home", "headers", "api", "anthropic", "mine", "unknown", "nowhere", "badurl", "relative", "keyless", "odd", "oddopts", "missing", "aws", "both", "models", "pointers"}
 	routes, skipped := Routes(root, ids, env)
 
 	want := map[string]struct{ base, key string }{
@@ -462,6 +504,9 @@ func TestRoutes(t *testing.T) {
 		"api":       {"https://api.example/v2", "k"},
 		"anthropic": {"https://api.anthropic.com/v1", "sk-ant"},
 		"mine":      {"https://api.openai.com/v1", "sk-oai"},
+		"both":      {"https://x.example", "k"},
+		"models":    {"https://x.example", "k"},
+		"pointers":  {"https://x.example", "k"},
 	}
 	if len(routes) != len(want) {
 		t.Errorf("routes for %d providers, want %d: %v", len(routes), len(want), routes)
@@ -475,9 +520,15 @@ func TestRoutes(t *testing.T) {
 	if h := routes["headers"].Headers; len(h) != 2 || h["X-Team"] != "t1" || h["Authorization"] != "Bearer h" {
 		t.Errorf("headers: %v", h)
 	}
-	for id, why := range map[string]string{"unknown": "where its API is", "nowhere": "where its API is", "badurl": "isn't an http or https URL", "relative": "isn't an http or https URL"} {
+	for id, why := range map[string]string{"unknown": "where its API is", "nowhere": "where its API is", "badurl": "isn't an http or https URL", "relative": "isn't an http or https URL",
+		// Secrets that aren't the API key or a header: the gateway doesn't
+		// keep them, whether it serves the provider or not.
+		"aws":    "the gateway keeps a provider's options.apiKey and options.headers, not its options.secretAccessKey, options.sessionToken",
+		"both":   "not its options.clientSecret, options.nested.private_key, options.nested.list.password and 1 more",
+		"models": "not its models.m1.headers.Authorization, models.m2.options.apiKey",
+	} {
 		if !strings.Contains(skipped[id], why) {
-			t.Errorf("%s skipped because %q, want %q", id, skipped[id], why)
+			t.Errorf("%s: a secret inside because %q, want %q", id, skipped[id], why)
 		}
 	}
 	// Nothing to keep out of the sandbox: neither served nor complained about.
@@ -486,8 +537,13 @@ func TestRoutes(t *testing.T) {
 			t.Errorf("%s: served %v, skipped %q", id, ok, skipped[id])
 		}
 	}
-	if len(skipped) != 4 {
-		t.Errorf("skipped: %v", skipped)
+	// What only points at a secret (a file, an id, a variable), isn't one
+	// (maxTokens), or isn't there inside a sandbox ({env:…}) is no secret.
+	if skipped["pointers"] != "" {
+		t.Errorf("pointers: %q", skipped["pointers"])
+	}
+	if len(skipped) != 7 {
+		t.Errorf("secrets inside: %v", skipped)
 	}
 	if r, s := Routes(parse(t, `[1]`), ids, env); len(r)+len(s) != 0 {
 		t.Errorf("a config that isn't an object: %v %v", r, s)

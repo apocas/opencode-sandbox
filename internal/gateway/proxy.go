@@ -28,6 +28,11 @@ type Route struct {
 // scheme ("Bearer KEY").
 var keyHeaders = map[string]bool{"Authorization": true, "X-Api-Key": true, "Api-Key": true, "X-Goog-Api-Key": true}
 
+// methods are the ones passed on: what talking to a model takes. The others
+// can do harm with your key (DELETE), or make a server send the request back
+// with the key in it (TRACE).
+var methods = map[string]bool{http.MethodGet: true, http.MethodHead: true, http.MethodPost: true}
+
 // Proxy passes a sandbox's requests on to its providers. A request for
 // /ID/chat/completions goes to provider ID's API with the real secrets put
 // where the sandbox's config had Token; only there, so that nothing the
@@ -81,6 +86,11 @@ func split(escaped string) (id, rest string, ok bool) {
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !methods[r.Method] {
+		w.Header().Set("Allow", "GET, HEAD, POST")
+		refuse(w, http.StatusMethodNotAllowed, "the gateway passes on GET, HEAD and POST requests only, not "+r.Method)
+		return
+	}
 	id, rest, ok := split(r.URL.EscapedPath())
 	if !ok {
 		refuse(w, http.StatusBadRequest, "not a path the gateway passes on")

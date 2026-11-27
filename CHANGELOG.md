@@ -4,6 +4,29 @@ All notable changes to opencode-sandbox. Versions follow
 [Semantic Versioning](https://semver.org); each release is tagged `vX.Y.Z`.
 To update, see [Updating](README.md#updating).
 
+## [0.9.1] - 2026-11-27
+
+### Security
+
+- The gateway passes on only `GET`, `HEAD` and `POST` requests. 0.9.0 passed
+  on any kind, including `TRACE`, which makes a server that answers it send
+  the request back: a program in a sandbox could have read the provider's API
+  key that way. Most APIs refuse `TRACE`. If yours answers it and something
+  you don't trust ran in a sandbox made with 0.9.0, replace that key.
+- A provider's secrets other than `options.apiKey` and `options.headers` (a
+  cloud's `secretAccessKey`, a header of a single model) aren't kept by the
+  gateway and go into the sandbox's config. 0.9.0 said nothing about them:
+  now opencode-sandbox warns when the sandbox starts, `ls` marks it with `*`
+  and `health` names the option.
+
+### Added
+
+- `new` and `cp` name the dot files that may hold secrets in what they copy
+  (`.env`, `.npmrc`, a `.git/config` with a token, any other but the likes of
+  `.gitignore`), since they go into the sandbox with the rest. On a terminal,
+  `new` waits for enter before it copies; the dashboard's form shows them
+  under the folder.
+
 ## [0.9.0] - 2026-11-27
 
 ### Added
@@ -286,6 +309,7 @@ First release.
   `--resume` warns about sandboxes created by an older version.
 - Bundles opencode 2.4.2 (x86_64 and arm64 builds, checksums verified).
 
+[0.9.1]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.9.1
 [0.9.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.9.0
 [0.8.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.8.0
 [0.7.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.7.0

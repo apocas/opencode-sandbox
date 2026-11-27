@@ -253,6 +253,15 @@ func (x *cli) newCmd(args []string) (int, error) {
 			}
 		}
 	}
+	// What often holds secrets is copied like the rest: say so first, while
+	// there's nothing to undo.
+	if w := x.c.DotFiles(ws).Warning(ui.Tilde(ws)); w != "" {
+		x.rep.Warn(w)
+		if x.stdinTTY && ui.IsTerminal(os.Stderr) {
+			lipgloss.Fprint(os.Stderr, x.t.Dim.Render("Press enter to copy it as it is, or ctrl-c to stop… "))
+			waitEnter()
+		}
+	}
 	created, err := x.c.Create(o)
 	if err != nil {
 		return 0, err
@@ -285,11 +294,16 @@ func (x *cli) showKey(k *core.NewKey) {
 	lipgloss.Fprintln(os.Stderr, box.Render(body))
 	if x.stdinTTY {
 		lipgloss.Fprint(os.Stderr, x.t.Dim.Render("Press enter to open the sandbox… "))
-		var b [1]byte
-		for {
-			if n, err := os.Stdin.Read(b[:]); n == 0 || err != nil || b[0] == '\n' || b[0] == '\r' {
-				break
-			}
+		waitEnter()
+	}
+}
+
+// waitEnter waits for enter on the terminal.
+func waitEnter() {
+	var b [1]byte
+	for {
+		if n, err := os.Stdin.Read(b[:]); n == 0 || err != nil || b[0] == '\n' || b[0] == '\r' {
+			return
 		}
 	}
 }
@@ -326,7 +340,7 @@ func (x *cli) ls(args []string) (int, error) {
 	}
 	for _, s := range ss {
 		if s.APIKeysInside {
-			x.out(x.t.Dim.Render("* API key stored inside the sandbox (made before 0.9.0 or with the gateway off, or a provider without options.baseURL)"))
+			x.out(x.t.Dim.Render("* API key stored inside the sandbox (made before 0.9.0 or with the gateway off, or one the gateway can't keep: see opencode-sandbox health)"))
 			break
 		}
 	}

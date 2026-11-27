@@ -88,12 +88,94 @@ func (e Env) resolve(s string) string {
 	})
 }
 
+// What makes an option's name that of a secret, and what makes it only point
+// at one (a file, an id, the name of a variable).
+var (
+	secretName = regexp.MustCompile(`(?i)key|secret|token|password|passwd|credential|authorization`)
+	notSecret  = regexp.MustCompile(`(?i)^public|(file|filename|path|env|name|url|uri|id)$`)
+)
+
+// secret says whether an option holds a secret that would go into a sandbox:
+// one named like a secret, with a value that isn't empty and isn't left to
+// {env:NAME} or {file:PATH}, which aren't there inside a sandbox.
+func secret(name, value string) bool {
+	return value != "" && !strings.Contains(value, "{env:") && !strings.Contains(value, "{file:") &&
+		secretName.MatchString(name) && !notSecret.MatchString(name)
+}
+
+// others lists what in a provider's config looks like a secret and isn't one
+// the gateway keeps: an option other than apiKey and headers (a cloud's
+// secretAccessKey, say), and an option or a header of one of its models.
+func others(p *occonfig.Object) []string {
+	var found []string
+	var walk func(v any, at string, top bool)
+	walk = func(v any, at string, top bool) {
+		switch v := v.(type) {
+		case *occonfig.Object:
+			for _, k := range v.Keys() {
+				if top && (k == "apiKey" || k == "headers") {
+					continue // the gateway keeps these
+				}
+				c, _ := v.Get(k)
+				if s, ok := c.(string); ok {
+					if secret(k, s) {
+						found = append(found, at+"."+k)
+					}
+					continue
+				}
+				walk(c, at+"."+k, false)
+			}
+		case []any:
+			for _, c := range v {
+				walk(c, at, false)
+			}
+		}
+	}
+	o, _ := p.Get("options")
+	walk(o, "options", true)
+	ms, _ := p.Get("models")
+	models, _ := ms.(*occonfig.Object)
+	if models == nil {
+		return found
+	}
+	for _, name := range models.Keys() {
+		v, _ := models.Get(name)
+		m, _ := v.(*occonfig.Object)
+		if m == nil {
+			continue
+		}
+		at := "models." + name
+		o, _ := m.Get("options")
+		walk(o, at+".options", false)
+		h, _ := m.Get("headers")
+		if hs, ok := h.(*occonfig.Object); ok {
+			for _, k := range hs.Keys() {
+				c, _ := hs.Get(k)
+				if s, _ := c.(string); secret(k, s) {
+					found = append(found, at+".headers."+k)
+				}
+			}
+		}
+	}
+	return found
+}
+
+// notKept says which secrets of a provider the gateway doesn't keep.
+func notKept(found []string) string {
+	list := strings.Join(found[:min(len(found), 3)], ", ")
+	if n := len(found) - 3; n > 0 {
+		list += fmt.Sprintf(" and %d more", n)
+	}
+	return "the gateway keeps a provider's options.apiKey and options.headers, not its " + list
+}
+
 // Routes reads your opencode config: for each provider in ids, where its API
-// is and the secrets your config has for it. skipped says why a provider
-// that has secrets can't be served, and so keeps them in its sandbox's
-// config; one without secrets needs no gateway and is in neither.
-func Routes(root any, ids []string, env Env) (routes map[string]Route, skipped map[string]string) {
-	routes, skipped = map[string]Route{}, map[string]string{}
+// is and the secrets your config has for it. inside says, for a provider
+// with a secret that goes into its sandbox's config all the same, why: the
+// gateway can't serve it, or the secret isn't one it keeps. A provider can
+// be in both; one without secrets needs no gateway and is in neither.
+func Routes(root any, ids []string, env Env) (routes map[string]Route, inside map[string]string) {
+	routes, inside = map[string]Route{}, map[string]string{}
 	top, _ := root.(*occonfig.Object)
 	if top == nil {
 		return
@@ -130,8 +212,12 @@ func Routes(root any, ids []string, env Env) (routes map[string]Route, skipped m
 				}
 			}
 		}
+		extra := others(p)
 		if r.Key == "" && len(r.Headers) == 0 {
-			continue // nothing to keep out of the sandbox
+			if len(extra) > 0 {
+				inside[id] = notKept(extra)
+			}
+			continue // nothing for the gateway to keep
 		}
 		base := env.resolve(str(opts, "baseURL"))
 		if base == "" {
@@ -145,16 +231,19 @@ func Routes(root any, ids []string, env Env) (routes map[string]Route, skipped m
 			base = apis[pkg]
 		}
 		if base == "" {
-			skipped[id] = "your opencode config doesn't say where its API is (options.baseURL)"
+			inside[id] = "your opencode config doesn't say where its API is (options.baseURL)"
 			continue
 		}
 		u, err := url.Parse(base)
 		if err != nil || u.Host == "" || u.Scheme != "https" && u.Scheme != "http" {
-			skipped[id] = fmt.Sprintf("its API's address (%s) isn't an http or https URL", base)
+			inside[id] = fmt.Sprintf("its API's address (%s) isn't an http or https URL", base)
 			continue
 		}
 		r.Base = u
 		routes[id] = r
+		if len(extra) > 0 {
+			inside[id] = notKept(extra)
+		}
 	}
 	return
 }

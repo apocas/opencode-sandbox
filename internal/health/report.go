@@ -185,9 +185,8 @@ func apiKeys(f Facts) string {
 		return "only the chosen providers' keys, which can be read inside the sandbox (" + gateway.Switch + " is off)"
 	}
 	s := "stay on this machine: a sandbox reaches its providers through a gateway here that puts the key into each request, so it can use them while it's open and can't read or copy their keys."
-	if n := len(f.KeysInside); n > 0 {
-		s += " Except " + strings.Join(f.KeysInside, ", ") + ", whose key goes into the sandbox: your opencode config doesn't say where " +
-			map[bool]string{true: "its API is", false: "their APIs are"}[n == 1] + " (options.baseURL)."
+	for _, k := range f.KeysInside {
+		s += " Except a secret of " + k.Provider + ", which goes into the sandbox: " + k.Why + "."
 	}
 	return s
 }

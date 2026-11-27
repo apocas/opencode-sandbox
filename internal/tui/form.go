@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
@@ -20,6 +21,41 @@ type newForm struct {
 	folder, name, key string
 	providers         []string
 	defaults          map[string]string // a default name for each folder
+
+	mu   sync.Mutex
+	dots map[string]core.DotFiles // the dot files of each folder looked at
+}
+
+// dotFiles is what DotFiles finds in a folder, looked for once.
+func (nf *newForm) dotFiles(c *core.Core, ws string) core.DotFiles {
+	nf.mu.Lock()
+	defer nf.mu.Unlock()
+	d, ok := nf.dots[ws]
+	if !ok {
+		d = c.DotFiles(ws)
+		nf.dots[ws] = d
+	}
+	return d
+}
+
+// about describes the folder typed so far: what happens to it, and the dot
+// files it has, which are copied too.
+func (nf *newForm) about(c *core.Core) string {
+	const copied = "copied into /workspace, never mounted"
+	ws, err := c.ResolveWorkspace(expand(nf.folder))
+	if err != nil {
+		return copied
+	}
+	if d := nf.dotFiles(c, ws); len(d.Found) > 0 {
+		// On a line of its own, short enough not to be wrapped: the form
+		// would break it in the middle of a name, at a dot.
+		line := []rune("its dot files too, which often hold secrets: " + strings.ReplaceAll(d.List(3), ", ", " · "))
+		if len(line) > 76 {
+			line = append(line[:75], '…')
+		}
+		return copied + "\n" + string(line)
+	}
+	return copied
 }
 
 // startForm opens the new-sandbox form.
@@ -37,7 +73,7 @@ func (m *model) startForm() tea.Cmd {
 		return nil
 	}
 	wd, _ := os.Getwd()
-	nf := &newForm{folder: ui.Tilde(wd), defaults: map[string]string{}}
+	nf := &newForm{folder: ui.Tilde(wd), defaults: map[string]string{}, dots: map[string]core.DotFiles{}}
 	c := m.c
 	defaultName := func() string {
 		ws, err := c.ResolveWorkspace(expand(nf.folder))
@@ -59,7 +95,7 @@ func (m *model) startForm() tea.Cmd {
 	nf.key = "new"
 	fields := []huh.Field{
 		huh.NewInput().Title("Folder to copy").
-			Description("copied into /workspace, never mounted").
+			DescriptionFunc(func() string { return nf.about(c) }, &nf.folder).
 			Value(&nf.folder).
 			SuggestionsFunc(func() []string { return dirSuggestions(nf.folder) }, &nf.folder).
 			Validate(func(v string) error { _, err := c.ResolveWorkspace(expand(v)); return err }),
@@ -207,6 +243,9 @@ func (m *model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		o := core.CreateOptions{Workspace: expand(nf.folder), Name: name, Key: nf.key, Providers: nf.providers}
 		m.prog = progress{title: "Creating sandbox '" + name + "' from " + ui.Tilde(ws)}
+		if d := nf.dotFiles(c, ws); len(d.Found) > 0 {
+			m.prog.notes = append(m.prog.notes, prefix(true)+"copying its dot files too: "+d.List(4))
+		}
 		return m, m.background("Creating '"+name+"'", func() tea.Msg {
 			created, err := c.Create(o)
 			return createdMsg{created, err}

@@ -43,18 +43,18 @@ func (a *Core) config() any {
 	return a.cfgRoot
 }
 
-// keysInside says whether a sandbox has an API key in its config, as your
-// opencode config is now: all of its providers' without a gateway, and with
-// one, those of the providers the gateway can't serve.
+// keysInside says whether a sandbox has a provider's secret in its config,
+// as your opencode config is now: all of its providers' without a gateway,
+// and with one, those the gateway can't serve or doesn't keep.
 func (a *Core) keysInside(r backend.Row) bool {
 	if r.Providers == "" {
 		return true // from before provider selection: it has them all
 	}
-	routes, skipped := gateway.Routes(a.config(), splitList(r.Providers), gatewayEnv())
+	routes, inside := gateway.Routes(a.config(), splitList(r.Providers), gatewayEnv())
 	if r.Gateway != "" {
-		return len(skipped) > 0
+		return len(inside) > 0
 	}
-	return len(routes)+len(skipped) > 0
+	return len(routes)+len(inside) > 0
 }
 
 // gatewayState is what a sandbox's gateway is told by the launcher that
@@ -82,11 +82,11 @@ func (a *Core) throughGateway(name string, root any, cfg *occonfig.Object, provi
 		return err
 	}
 	st := gatewayState{Token: "opencode-sandbox-" + hex.EncodeToString(b), Providers: providers}
-	routes, skipped := gateway.Routes(root, providers, gatewayEnv())
+	routes, inside := gateway.Routes(root, providers, gatewayEnv())
 	gateway.Rewrite(cfg, routes, st.Token)
 	for _, id := range providers {
-		if why, ok := skipped[id]; ok {
-			a.Rep.Warn(fmt.Sprintf("provider '%s': its API key goes into sandbox '%s', because %s", id, name, why))
+		if why, ok := inside[id]; ok {
+			a.Rep.Warn(fmt.Sprintf("provider '%s' has a secret that goes into sandbox '%s': %s", id, name, why))
 		}
 	}
 	if err := state.MkdirPrivate(state.RunDir()+"/gateways", state.GatewayDir(name)); err != nil {
@@ -281,9 +281,9 @@ func (g *gatewaySource) load() {
 		if err != nil {
 			g.logf("can't read %s: %v", state.Config(), err)
 		}
-		routes, skipped := gateway.Routes(root, g.st.Providers, gatewayEnv())
-		for id, why := range skipped {
-			g.logf("provider '%s' isn't served: %s", id, why)
+		routes, inside := gateway.Routes(root, g.st.Providers, gatewayEnv())
+		for id, why := range inside {
+			g.logf("provider '%s' has a secret in the sandbox: %s", id, why)
 		}
 		g.rt, g.cfgStamp = routes, s
 	}

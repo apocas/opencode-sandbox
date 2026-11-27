@@ -66,11 +66,10 @@ type Facts struct {
 	ConfigErr string // why the config can't be used; "" if it can
 	Providers int
 	// Gateway: new sandboxes reach their providers through a gateway, which
-	// keeps the API keys on this machine. KeysInside are the providers whose
-	// key goes into a sandbox all the same: the gateway doesn't know where
-	// their API is.
+	// keeps the API keys on this machine. KeysInside are the providers with
+	// a secret that goes into a sandbox all the same, and why.
 	Gateway    bool
-	KeysInside []string
+	KeysInside []KeyInside
 
 	MissingSSH []string // OpenSSH tools not on PATH
 	PidsLimit  int
@@ -81,6 +80,10 @@ type Facts struct {
 
 // appleOK: new sandboxes can go to Apple container.
 func (f Facts) appleOK() bool { return f.AppleRunning && f.AppleSilicon && f.MacOS >= 26 }
+
+// KeyInside is a provider with a secret the gateway doesn't keep out of
+// sandboxes, and why.
+type KeyInside struct{ Provider, Why string }
 
 // Gather finds out the facts on this machine, with the docker and apple
 // engines. It only reads: nothing is built, started or changed.
@@ -163,10 +166,10 @@ func Gather(r run.Runner, docker, apple backend.Engine, version, image string) F
 		if f.Providers == 0 {
 			f.ConfigErr = "no providers"
 		}
-		_, skipped := gateway.Routes(root, ids, gateway.Env{Getenv: os.Getenv, Dir: filepath.Dir(f.Config), Home: state.Home()})
+		_, inside := gateway.Routes(root, ids, gateway.Env{Getenv: os.Getenv, Dir: filepath.Dir(f.Config), Home: state.Home()})
 		for _, id := range ids {
-			if _, ok := skipped[id]; ok {
-				f.KeysInside = append(f.KeysInside, id)
+			if why, ok := inside[id]; ok {
+				f.KeysInside = append(f.KeysInside, KeyInside{Provider: id, Why: why})
 			}
 		}
 	}

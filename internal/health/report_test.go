@@ -186,12 +186,17 @@ func TestReport(t *testing.T) {
 		{"API keys stay here, in Apple container too", func(f *Facts) {
 			f.AppleCLI, f.AppleVersion, f.AppleRunning, f.Engine = true, "1.7.1", true, "apple"
 		}, mac, true, []string{"api keys   stay on this machine"}, []string{"Except", "can be read inside"}},
-		{"a provider the gateway can't serve", func(f *Facts) { f.KeysInside = []string{"p9"} }, linux, true,
-			[]string{"api keys   stay on this machine", "Except p9, whose key goes into the sandbox: your opencode config doesn't say where its API is (options.baseURL)."},
+		{"a provider the gateway can't serve", func(f *Facts) {
+			f.KeysInside = []KeyInside{{"p9", "your opencode config doesn't say where its API is (options.baseURL)"}}
+		}, linux, true,
+			[]string{"api keys   stay on this machine", "Except a secret of p9, which goes into the sandbox: your opencode config doesn't say where its API is (options.baseURL)."},
 			[]string{"can be read inside"}},
-		{"two providers the gateway can't serve", func(f *Facts) { f.KeysInside = []string{"p8", "p9"} }, linux, true,
-			[]string{"Except p8, p9, whose key goes into the sandbox: your opencode config doesn't say where their APIs are"}, nil},
-		{"the gateway switched off", func(f *Facts) { f.Gateway, f.KeysInside = false, []string{"p9"} }, linux, true,
+		{"two providers with secrets the gateway doesn't keep", func(f *Facts) {
+			f.KeysInside = []KeyInside{{"p8", "no address"}, {"aws", "the gateway keeps a provider's options.apiKey and options.headers, not its options.secretAccessKey"}}
+		}, linux, true,
+			[]string{"Except a secret of p8, which goes into the sandbox: no address.",
+				"Except a secret of aws, which goes into the sandbox: the gateway keeps a provider's options.apiKey and options.headers, not its options.secretAccessKey."}, nil},
+		{"the gateway switched off", func(f *Facts) { f.Gateway, f.KeysInside = false, []KeyInside{{"p9", "x"}} }, linux, true,
 			[]string{"api keys   only the chosen providers' keys, which can be read inside the sandbox (OPENCODE_SANDBOX_GATEWAY is off)"},
 			[]string{"stay on this machine", "Except"}},
 	}

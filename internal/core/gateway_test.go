@@ -98,7 +98,7 @@ func TestWriteConfigKeepsSecretsHere(t *testing.T) {
 			if fi, _ := os.Stat(state.GatewayDir("demo")); fi.Mode().Perm() != 0o700 {
 				t.Errorf("the gateway's folder is %v", fi.Mode().Perm())
 			}
-			if len(rep.said) != 1 || !strings.Contains(rep.said[0], "provider 'nowhere': its API key goes into sandbox 'demo'") {
+			if len(rep.said) != 1 || !strings.Contains(rep.said[0], "provider 'nowhere' has a secret that goes into sandbox 'demo': your opencode config doesn't say where its API is") {
 				t.Errorf("said: %q", rep.said)
 			}
 

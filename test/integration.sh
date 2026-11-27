@@ -229,8 +229,9 @@ grep -q 'data: \[DONE\]' <<<"$out" && ok "an answer is streamed back" || bad "an
 : >"$T/provider.log"
 out="$(xc it-h sh -c "curl -sS -m 20 -o /dev/null -H 'Authorization: Bearer nope' -H \"X-Debug: \$(jq -r .provider.p1.options.apiKey $CFG)\" http://127.0.0.1:17872/p1/models
   curl -sS -m 20 -o /dev/null -w '%{http_code} ' --path-as-is http://127.0.0.1:17872/p1/../x
-  curl -sS -m 20 -o /dev/null -w '%{http_code}' http://127.0.0.1:17872/p2/models" 2>&1)"
-[[ "$out" == "400 404" ]] && grep -q '"Bearer nope"' "$T/provider.log" && ! grep -q "$REAL_KEY" "$T/provider.log" \
+  curl -sS -m 20 -o /dev/null -w '%{http_code} ' http://127.0.0.1:17872/p2/models
+  curl -sS -m 20 -o /dev/null -w '%{http_code}' -X TRACE $auth http://127.0.0.1:17872/p1/models" 2>&1)"
+[[ "$out" == "400 404 405" ]] && grep -q '"Bearer nope"' "$T/provider.log" && ! grep -q "$REAL_KEY" "$T/provider.log" \
   && ok "the key goes nowhere else" || bad "the key goes nowhere else" "$out"$'\n'"$(cat "$T/provider.log")"
 pgrep -f -- "$BIN --internal-gateway it-h" >/dev/null && ok "its gateway runs while it's open" || bad "its gateway runs while it's open"
 pid="$(pgrep -f -- "$BIN new -n it-h" | head -1)"
@@ -255,6 +256,19 @@ check "ls marks an API key stored inside" 'it-k .* p1\* ' "$BIN" ls
 check "ls: and only there" 'it-q .* p1 ' "$BIN" ls
 check "ls explains the mark" '\* API key stored inside the sandbox' "$BIN" ls
 
+echo "== dot files"
+# What often holds secrets is named before a folder is copied; what never
+# does (.gitignore) isn't. On a terminal, it waits for enter first.
+mkdir -p "$T/dots/app" && echo 'KEY=1' >"$T/dots/.env" && echo 'x' >"$T/dots/.gitignore" && echo 'KEY=2' >"$T/dots/app/.env.local"
+out="$("$BIN" new "$T/dots" -n it-e -k none -- --version 2>&1 </dev/null)"
+grep -q 'has dot files, which often hold secrets.*: \.env, app/\.env\.local\. Anything' <<<"$out" && ! grep -q 'gitignore' <<<"$out" && grep -qE 'opencode v?[0-9]' <<<"$out" \
+  && ok "new names the dot files it copies" || bad "new names the dot files it copies" "$out"
+out="$("$BIN" new "$T/ws" -n it-f -k none -- --version 2>&1 </dev/null)"
+grep -q 'dot files' <<<"$out" && bad "no warning without dot files" "$out" || ok "no warning without dot files"
+out="$(pty "wait enter" "$BIN" new "$T/dots" -n it-g -k none -- --version 2>&1)"
+grep -q 'Press enter to copy it as it is' <<<"$out" && grep -q 'opening sandbox' <<<"$out" && ok "on a terminal it asks first" || bad "on a terminal it asks first" "$out"
+check "cp names them too" 'is a dot file, which often holds secrets' "$BIN" cp it-f "$T/dots/.env"
+
 echo "== delete"
 out="$("$BIN" rm it-a it-b it-nope 2>&1)"
 grep -q 'removed it-a and its disposable key SHA256' <<<"$out" && grep -q "no sandbox named 'it-nope'" <<<"$out" \
@@ -266,7 +280,7 @@ if (( FOREIGN == 0 )); then
   check "ls empty again" 'no sandboxes' "$BIN" ls
 else
   skip "rm --all -y"
-  check "rm the rest by name" 'removed it-c' "$BIN" rm it-c it-d it-h it-q it-k
+  check "rm the rest by name" 'removed it-c' "$BIN" rm it-c it-d it-h it-q it-k it-e it-f it-g
   none "ls has none of the test's again"
 fi
 
