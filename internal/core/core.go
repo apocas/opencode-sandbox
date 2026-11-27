@@ -30,7 +30,7 @@ import (
 
 // Version is this release; images are tagged with it, so after an update the
 // next run builds the matching image by itself.
-const Version = "0.6.0"
+const Version = "0.6.1"
 
 // pidsLimit is the most processes a sandbox may run.
 const pidsLimit = 1024

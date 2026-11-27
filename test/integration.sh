@@ -3,7 +3,8 @@
 # container (whichever new sandboxes go to; OPENCODE_SANDBOX_ENGINE picks).
 # Creates, opens, copies into/out of and deletes sandboxes named it-*, with a
 # throwaway opencode config (no real provider is called) and its own data
-# folder.
+# folder. It touches no other sandbox: where you have some, the steps that
+# act on "all" or "the first" sandbox are skipped.
 #
 # Usage: test/integration.sh BINARY [BASH_LAUNCHER]
 #   BINARY         the opencode-sandbox binary to test
@@ -90,6 +91,16 @@ state() {
 }
 echo "== engine: $ENGINE"
 
+# Sandboxes that aren't this test's. With any around, `rm --all` and picking
+# the first sandbox of the list are not run: they would hit yours.
+names() { "$BIN" ls 2>/dev/null | awk 'NR > 1 && $1 != "*" && $2 != "" { print $2 }'; }
+FOREIGN="$(names | grep -vc '^it-' || true)"
+skip() { echo "  skip  $1 (you have $FOREIGN sandboxes of your own here)"; }
+# none DESC: no it-* sandbox is listed
+none() {
+  if names | grep -q '^it-'; then bad "$1" "$("$BIN" ls 2>&1)"; else ok "$1"; fi
+}
+
 echo "== basics"
 check  "version" '^opencode-sandbox [0-9]+\.[0-9]+\.[0-9]+ \(opencode ' "$BIN" version
 check  "help" 'Usage: opencode-sandbox' "$BIN" help
@@ -104,7 +115,7 @@ refuse "invalid name" 'invalid sandbox name' "$BIN" new "$T/ws" -n '-bad' -k non
 refuse "home folder refused" 'contains your home directory' "$BIN" new "$HOME" -k none
 refuse "~/.ssh refused" 'inside ~/.ssh' "$BIN" new "$HOME/.ssh" -k none
 refuse "no key without a terminal" 'pass -k NAME' "$BIN" new "$T/ws" -n it-x
-check  "ls empty" 'no sandboxes' "$BIN" ls
+if (( FOREIGN == 0 )); then check "ls empty" 'no sandboxes' "$BIN" ls; else none "ls has none of the test's"; fi
 check  "health" 'used +(Docker|gVisor|Apple container)' "$BIN" health
 if [[ "$ENGINE" == apple ]]; then
   DOCKER_HOST=unix:///nonexistent.sock check "health without Docker" "only sandboxes made with it need it" "$BIN" health
@@ -143,7 +154,8 @@ echo "== open and agents"
 check  "open NAME" 'opencode v?[0-9]' "$BIN" open it-b
 refuse "open without a name or terminal" 'open needs a sandbox name' "$BIN" open
 check  "agents" 'no sandbox agents running|\(' "$BIN" agents
-check  "agents stop" 'all sandbox ssh-agents stopped' "$BIN" agents stop
+# (stopping every agent would cut SSH in sandboxes of yours that are open)
+if (( FOREIGN == 0 )); then check "agents stop" 'all sandbox ssh-agents stopped' "$BIN" agents stop; else skip "agents stop"; fi
 
 echo "== on a terminal"
 rm -f "$DATA/known_hosts"
@@ -155,11 +167,20 @@ fi
 out="$(OPENCODE_SANDBOX_CONFIG="$T/two.json" pty "space down space enter" "$BIN" new -n it-d -k none -- --version 2>&1)"
 grep -q 'Which opencode providers' <<<"$out" && grep -q 'opening sandbox' <<<"$out" && ok "provider picker" || bad "provider picker" "$out"
 check "both providers chosen" 'it-d .*(p1,p2|p2,p1)' "$BIN" ls
-out="$(pty "enter" "$BIN" open 2>&1)"
-grep -q 'Open which sandbox' <<<"$out" && grep -q 'opening sandbox' <<<"$out" && ok "sandbox picker" || bad "sandbox picker" "$out"
-out="$(pty "h wait esc q" "$BIN" 2>&1)"
-grep -q 'Sandboxes (4)' <<<"$out" && grep -q 'it-d' <<<"$out" && grep -q 'How a new sandbox is isolated' <<<"$out" \
+if (( FOREIGN == 0 )); then
+  out="$(pty "enter" "$BIN" open 2>&1)"
+  grep -q 'Open which sandbox' <<<"$out" && grep -q 'opening sandbox' <<<"$out" && ok "sandbox picker" || bad "sandbox picker" "$out"
+else
+  skip "sandbox picker"
+fi
+# The dashboard: the list, the health report and back, the new-sandbox form
+# and back without creating one, then quit.
+out="$(pty "h wait esc n wait esc q" "$BIN" 2>&1)"
+grep -q "Sandboxes ($((4 + FOREIGN)))" <<<"$out" && grep -q 'it-d' <<<"$out" && grep -q 'How a new sandbox is isolated' <<<"$out" \
   && ok "dashboard" || bad "dashboard" "$(tail -c 3000 <<<"$out")"
+grep -q 'Folder to copy' <<<"$out" && grep -q 'no sandbox created' <<<"$out" \
+  && ok "dashboard: esc leaves the new-sandbox form" || bad "dashboard: esc leaves the new-sandbox form" "$(tail -c 3000 <<<"$out")"
+[[ "$(names | grep -c '^it-')" == 4 ]] && ok "the form created nothing" || bad "the form created nothing" "$("$BIN" ls)"
 
 echo "== closing the terminal stops the sandbox"
 pty "" "$BIN" new -n it-h -k none >/dev/null 2>&1 &
@@ -180,8 +201,14 @@ grep -q 'removed it-a and its disposable key SHA256' <<<"$out" && grep -q "no sa
   && ok "rm" || bad "rm" "$out"
 [[ ! -e "$DATA/keys/it-a" ]] && ok "disposable key deleted" || bad "disposable key deleted"
 refuse "rm --all needs -y without a terminal" 'add -y' "$BIN" rm --all
-check "rm --all -y" 'removed it-c' "$BIN" rm --all -y
-check "ls empty again" 'no sandboxes' "$BIN" ls
+if (( FOREIGN == 0 )); then
+  check "rm --all -y" 'removed it-c' "$BIN" rm --all -y
+  check "ls empty again" 'no sandboxes' "$BIN" ls
+else
+  skip "rm --all -y"
+  check "rm the rest by name" 'removed it-c' "$BIN" rm it-c it-d it-h
+  none "ls has none of the test's again"
+fi
 
 if [[ -n "$OLD" && "$ENGINE" == docker ]]; then
   echo "== compatibility with $("$OLD" --version)"

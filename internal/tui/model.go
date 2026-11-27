@@ -76,6 +76,7 @@ type model struct {
 	loaded    bool
 	cursor    int
 	marked    map[string]bool
+	goTo      string            // a sandbox to move to once it's listed
 	fps       map[string]string // key fingerprints, looked up lazily
 	agents    map[string]bool
 
@@ -89,7 +90,8 @@ type model struct {
 	status     string
 	statusKind kind
 
-	showHelp bool
+	showHelp  bool
+	quitArmed bool // ctrl+c was pressed once in the list
 
 	form *huh.Form
 	nf   *newForm
@@ -203,10 +205,38 @@ func (m *model) loadHealth() tea.Cmd {
 
 func tick() tea.Cmd { return tea.Tick(2*time.Second, func(time.Time) tea.Msg { return tickMsg{} }) }
 
-// background runs f as the one background operation, showing what.
+// background runs f as the one background operation, showing what; nil if
+// one is running already.
 func (m *model) background(what string, f func() tea.Msg) tea.Cmd {
+	if m.isBusy() {
+		return nil
+	}
 	m.busy = what
 	return func() tea.Msg { return f() }
+}
+
+// isBusy says so when a background operation is running.
+func (m *model) isBusy() bool {
+	if m.busy == "" {
+		return false
+	}
+	m.say(warn, "wait until it's done %s", lowerFirst(m.busy))
+	return true
+}
+
+// quit leaves the dashboard, unless something would be left half done.
+func (m *model) quit() (tea.Model, tea.Cmd) {
+	if m.isBusy() {
+		return m, nil
+	}
+	return m, tea.Quit
+}
+
+func lowerFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToLower(s[:1]) + s[1:]
 }
 
 func (m *model) say(k kind, format string, args ...any) {
@@ -224,7 +254,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == healthMode && m.vp.TotalLineCount() > 0 {
 			return m, m.loadHealth() // rewrap
 		}
-		return m, nil
+		return m, m.sizeForm()
 	case tea.BackgroundColorMsg:
 		if dark := msg.IsDark(); dark != m.t.Dark {
 			*m.t = *ui.NewTheme(dark)
@@ -287,7 +317,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.keyDone()
 		return m, m.load()
 	case pubMsg:
-		m.busy = ""
 		if msg.err != nil {
 			m.say(bad, "%v", msg.err)
 			return m, nil
@@ -324,29 +353,32 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.load()
 	case builtMsg:
-		m.busy = ""
-		m.prog.finished, m.prog.err = true, msg.err
-		if m.prog.current != "" {
-			m.prog.done = append(m.prog.done, m.prog.current)
-			m.prog.current = ""
-		}
+		watching := m.finish(msg.err)
 		if msg.err == nil {
-			m.mode = listMode
+			if watching {
+				m.mode = listMode
+			}
 			m.say(good, "image built; new sandboxes use it")
 		}
 		return m, nil
 	case createdMsg:
-		m.busy = ""
-		m.prog.finished = true
-		if m.prog.current != "" {
-			m.prog.done = append(m.prog.done, m.prog.current)
-			m.prog.current = ""
-		}
+		watching := m.finish(msg.err)
 		if msg.err != nil {
-			m.prog.err = msg.err
+			return m, m.load()
+		}
+		if !watching {
+			// It was left to finish in the background: say so, and point at
+			// it, rather than take the screen over now.
+			hint := "enter opens it"
+			if msg.c.NewKey != nil {
+				hint = "p shows its new key, enter opens it"
+			}
+			m.goTo = msg.c.Name
+			m.say(good, "created '%s'; %s", msg.c.Name, hint)
 			return m, m.load()
 		}
 		m.mode = listMode
+		m.goTo = msg.c.Name
 		m.say(good, "created '%s'", msg.c.Name)
 		if k := msg.c.NewKey; k != nil {
 			body := "Its private part stays on this machine and never enters the sandbox."
@@ -373,6 +405,27 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// finish ends the operation the progress view shows, and reports whether
+// the user is still watching it. A failure that nobody watched is shown
+// anyway: in the progress view from the list, else on the status line.
+func (m *model) finish(err error) (watching bool) {
+	watching = m.mode == progressMode
+	m.busy = ""
+	m.prog.finished, m.prog.err = true, err
+	if m.prog.current != "" {
+		m.prog.done = append(m.prog.done, m.prog.current)
+		m.prog.current = ""
+	}
+	if err != nil && !watching {
+		if m.mode == listMode && !m.filtering {
+			m.mode = progressMode
+		} else {
+			m.say(bad, "%v", err)
+		}
+	}
+	return watching
+}
+
 func prefix(warn bool) string {
 	if warn {
 		return "! "
@@ -395,6 +448,11 @@ func (m *model) setRows(ss []core.Sandbox) {
 	for i, s := range m.rows {
 		if cur != nil && s.Name == cur.Name {
 			m.cursor = i
+		}
+	}
+	for i, s := range m.rows {
+		if s.Name == m.goTo {
+			m.cursor, m.goTo = i, ""
 		}
 	}
 	m.cursor = min(m.cursor, max(len(m.rows)-1, 0))
@@ -453,19 +511,40 @@ func (m *model) lookupCurrent() tea.Cmd {
 
 func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	s := k.String()
+	m.status = "" // what was said answered the previous key
+	armed := m.quitArmed
+	m.quitArmed = false
 	if s == "ctrl+c" {
-		if m.busy != "" {
-			m.say(warn, "wait until %s finishes (ctrl+c is ignored meanwhile, so nothing is left half done)", strings.ToLower(m.busy))
+		if m.mode == listMode && !m.filtering {
+			// Twice to quit: the ctrl+c that closes opencode is easily
+			// pressed once too often, and would land here.
+			if armed {
+				return m.quit()
+			}
+			m.quitArmed = true
+			m.say(info, "press ctrl+c again to quit (or q)")
 			return m, nil
 		}
-		return m, tea.Quit
+		// Inside a form or dialog, ctrl+c backs out of it, like esc.
+		s, k = "esc", tea.KeyPressMsg{Code: tea.KeyEscape}
 	}
 	switch m.mode {
 	case formMode:
+		// esc leaves the form, unless the field uses it (to end a filter).
+		if s == "esc" && !formUses(m.form, "esc") {
+			m.mode, m.form = listMode, nil
+			m.say(info, "no sandbox created")
+			return m, nil
+		}
 		return m.updateForm(k)
 	case progressMode:
-		if m.prog.finished && (s == "esc" || s == "enter" || s == "q") {
+		switch {
+		case m.prog.finished && (s == "esc" || s == "enter" || s == "q"):
 			m.mode = listMode
+		case !m.prog.finished && s == "esc":
+			// It can't be cancelled halfway, but needn't be watched.
+			m.mode = listMode
+			m.say(info, "still %s; you'll see here when it's done", lowerFirst(m.busy))
 		}
 		return m, nil
 	case keyMode:
@@ -526,6 +605,12 @@ func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	if m.filtering {
 		switch s {
+		case "up":
+			m.cursor = max(m.cursor-1, 0)
+			return m, m.lookupCurrent()
+		case "down":
+			m.cursor = min(m.cursor+1, max(len(m.rows)-1, 0))
+			return m, m.lookupCurrent()
 		case "esc":
 			m.filtering = false
 			m.filter.SetValue("")
@@ -547,11 +632,7 @@ func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	cur := m.current()
 	switch s {
 	case "q":
-		if m.busy != "" {
-			m.say(warn, "wait until %s finishes", strings.ToLower(m.busy))
-			return m, nil
-		}
-		return m, tea.Quit
+		return m.quit()
 	case "up", "k":
 		m.cursor = max(m.cursor-1, 0)
 	case "down", "j":
@@ -590,7 +671,7 @@ func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "n":
 		return m, m.startForm()
 	case "b":
-		if m.busy != "" {
+		if m.isBusy() {
 			return m, nil
 		}
 		if err := m.c.CanCreate(); err != nil {
@@ -612,8 +693,7 @@ func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	switch s {
 	case "enter", "o":
-		if m.busy != "" {
-			m.say(warn, "wait until %s finishes", strings.ToLower(m.busy))
+		if m.isBusy() {
 			return m, nil
 		}
 		if cur.State == core.StateOpen && cur.Engine == "apple" {
@@ -623,6 +703,11 @@ func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		name, c := cur.Name, m.c
 		return m, m.background("Preparing '"+name+"'", func() tea.Msg { return preparedMsg{name, c.Prepare(name)} })
 	case "s":
+		// Not while something runs in the background: the dashboard stands
+		// still while the terminal is the shell's.
+		if m.isBusy() {
+			return m, nil
+		}
 		if cur.State != core.StateOpen {
 			m.say(warn, "'%s' isn't open; enter opens it", cur.Name)
 			return m, nil
@@ -638,6 +723,9 @@ func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		name, c := cur.Name, m.c
 		return m, func() tea.Msg { pub, err := c.PubKey(name); return pubMsg{name, pub, err} }
 	case "c", "g":
+		if m.isBusy() {
+			return m, nil
+		}
 		m.in = pathInput{op: map[string]string{"c": "cp", "g": "get"}[s], sandbox: cur.Name, ti: textinput.New()}
 		if s == "c" {
 			m.in.ti.Prompt = "copy into " + cur.Name + ":/workspace/  from "
@@ -651,7 +739,7 @@ func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.mode = inputMode
 		return m, m.in.ti.Focus()
 	case "d", "x", "delete":
-		if m.busy != "" {
+		if m.isBusy() {
 			return m, nil
 		}
 		m.del = nil

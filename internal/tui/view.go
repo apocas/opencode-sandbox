@@ -84,30 +84,36 @@ func (m *model) header() string {
 	return left + strings.Repeat(" ", gap) + right
 }
 
+// statusLine is the line above the key hints: a prompt while one is open,
+// else what's running in the background and the last thing that was said.
 func (m *model) statusLine() string {
 	t := m.t
-	if m.busy != "" {
-		return " " + m.spin.View() + " " + trunc(m.busy+"…", m.w-4)
-	}
-	if m.mode == inputMode {
+	switch {
+	case m.mode == inputMode:
 		return " " + m.in.ti.View()
-	}
-	if m.filtering || m.filter.Value() != "" {
+	case m.filtering:
+		// Only while typing in it: an applied filter is named in the list's
+		// title, and mustn't hide what's said here.
 		return " " + m.filter.View()
 	}
-	if m.status == "" {
-		return ""
+	line := ""
+	if m.busy != "" {
+		line = m.spin.View() + " " + m.busy + "…"
 	}
-	var line string
-	switch m.statusKind {
-	case good:
-		line = t.Success(m.status)
-	case warn:
-		line = t.Warning(m.status)
-	case bad:
-		line = t.Failure(m.status)
-	default:
-		line = t.Info(m.status)
+	if m.status != "" {
+		if line != "" {
+			line += t.Dim.Render("  ·  ")
+		}
+		switch m.statusKind {
+		case good:
+			line += t.Success(m.status)
+		case warn:
+			line += t.Warning(m.status)
+		case bad:
+			line += t.Failure(m.status)
+		default:
+			line += t.Info(m.status)
+		}
 	}
 	return " " + trunc(line, m.w-2)
 }
@@ -123,12 +129,14 @@ func (m *model) footer() string {
 			items = []string{k("↑/↓", "scroll"), k("q", "quit")}
 		}
 	case formMode:
-		items = []string{k("tab", "next"), k("enter", "next/create"), k("esc", "cancel")}
+		for _, h := range formHints(m.form) {
+			items = append(items, k(h[0], h[1]))
+		}
 	case progressMode:
 		if m.prog.finished {
 			items = []string{k("esc", "back")}
 		} else {
-			items = []string{t.Dim.Render("working… (this can't be cancelled halfway)")}
+			items = []string{k("esc", "back to the list"), t.Dim.Render("it carries on, and can't be cancelled halfway")}
 		}
 	case keyMode:
 		items = []string{k("y", "copy")}
@@ -192,7 +200,10 @@ func (m *model) main(h int) string {
 	if showDetails {
 		listW = m.w * 3 / 5
 	}
-	title := fmt.Sprintf("Sandboxes %s", m.t.Dim.Render(fmt.Sprintf("(%d)", len(m.all))))
+	title := "Sandboxes"
+	if m.loaded {
+		title += " " + m.t.Dim.Render(fmt.Sprintf("(%d)", len(m.all)))
+	}
 	if q := m.filter.Value(); q != "" {
 		title += m.t.Dim.Render(fmt.Sprintf(" · %d match %q", len(m.rows), q))
 	}

@@ -4,6 +4,24 @@ All notable changes to opencode-sandbox. Versions follow
 [Semantic Versioning](https://semver.org); each release is tagged `vX.Y.Z`.
 To update, see [Updating](README.md#updating).
 
+## [0.6.1] - 2026-11-27
+
+### Fixed
+
+- Dashboard: `esc` (or `ctrl-c`) leaves the new-sandbox form without creating
+  anything. Before, the only ways out were to create a sandbox or to quit.
+- Dashboard: while a sandbox is being created or the image built, `esc` goes
+  back to the list; the work carries on, and you're told when it's done.
+- Dashboard: `ctrl-c` in the list quits on the second press, so one press too
+  many when closing opencode doesn't close the dashboard as well. `q` quits at
+  once.
+- Dashboard: the new-sandbox form hid its provider choices. It now also shows
+  the keys of the field in use, and `tab` completes the folder.
+- Dashboard: messages were hidden while a filter was applied, and "wait until
+  it's done" while something ran in the background.
+- `test/integration.sh` leaves sandboxes other than its own alone: with any
+  around, it no longer runs `rm --all`, `agents stop` or the sandbox picker.
+
 ## [0.6.0] - 2026-11-27
 
 ### Changed (breaking)
@@ -186,6 +204,7 @@ First release.
   `--resume` warns about sandboxes created by an older version.
 - Bundles opencode 2.4.2 (x86_64 and arm64 builds, checksums verified).
 
+[0.6.1]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.6.1
 [0.6.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.6.0
 [0.5.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.5.0
 [0.4.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.4.0

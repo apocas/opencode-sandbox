@@ -52,9 +52,9 @@ func (a *Core) KeyChoices() ([]KeyChoice, string) {
 	} else {
 		why = fmt.Sprintf("Keys from ~/.ssh aren't offered because %s: they would have to be copied into the sandbox. A new disposable key is stored inside it.", a.plat.NoAgentWhy)
 	}
-	detail := "a fresh key for this sandbox only, kept on this machine and deleted with it"
+	detail := "for this sandbox only: kept on this machine, deleted with it"
 	if !a.plat.AgentOK {
-		detail = "a fresh key for this sandbox only, stored inside it and deleted with it"
+		detail = "for this sandbox only: stored inside it, deleted with it"
 	}
 	return append(out,
 		KeyChoice{Value: "new", Label: "new disposable key", Detail: detail},

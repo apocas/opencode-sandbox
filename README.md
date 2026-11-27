@@ -129,7 +129,7 @@ one way:
 check it against `SHA256SUMS`, and put it on your `PATH`:
 
 ```bash
-v=0.6.0 os=$(uname -s | tr A-Z a-z) arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+v=0.6.1 os=$(uname -s | tr A-Z a-z) arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 f=opencode-sandbox_${v}_${os}_${arch}
 curl -fLO https://github.com/apocas/opencode-sandbox/releases/download/v$v/$f
 curl -fL https://github.com/apocas/opencode-sandbox/releases/download/v$v/SHA256SUMS | grep " $f\$" | shasum -a 256 -c
@@ -169,7 +169,7 @@ your clone:
 cd /path/to/opencode-sandbox           # your clone
 git checkout master && git pull        # the latest code
 # or a specific release:
-git fetch --tags && git checkout v0.6.0
+git fetch --tags && git checkout v0.6.1
 opencode-sandbox version
 ```
 
@@ -235,7 +235,8 @@ opencode-sandbox open api                      # continue where you left off
 |---|---|
 | `↑` `↓` (`k` `j`) | move |
 | `enter` | open the sandbox, continuing its last session (or attach to it if it's open) |
-| `n` | create a sandbox |
+| `n` | create a sandbox: a short form (`enter` next field, `shift-tab` previous, `tab` completes the folder) |
+| `esc` | back: leaves a form or dialog without doing anything, as does `ctrl-c`. While a sandbox is being created, it goes back to the list and the work carries on |
 | `s` | bash inside the sandbox (it must be open) |
 | `c` / `g` | copy a file or folder into its `/workspace` / out of it, into the current folder |
 | `p` | show its public key (`y` copies it) |
@@ -244,7 +245,7 @@ opencode-sandbox open api                      # continue where you left off
 | `h` | the health report (see [Isolation](#isolation)) |
 | `b` | rebuild the image for new sandboxes |
 | `?` | all keys |
-| `q` | quit (open sandboxes keep running in the background only if you detached them) |
+| `q` | quit, as does `ctrl-c` pressed twice (open sandboxes keep running in the background only if you detached them) |
 
 ### Commands
 

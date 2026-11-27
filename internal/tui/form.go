@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 
@@ -23,8 +24,7 @@ type newForm struct {
 
 // startForm opens the new-sandbox form.
 func (m *model) startForm() tea.Cmd {
-	if m.busy != "" {
-		m.say(warn, "wait until %s finishes", strings.ToLower(m.busy))
+	if m.isBusy() {
 		return nil
 	}
 	if err := m.c.CanCreate(); err != nil {
@@ -79,9 +79,11 @@ func (m *model) startForm() tea.Cmd {
 		for i, p := range ps {
 			opts[i] = huh.NewOption(p.ID+"  "+m.t.Dim.Render(p.Description), p.ID)
 		}
-		fields = append(fields, huh.NewMultiSelect[string]().Title("Providers").
-			Description("space selects; the sandbox gets only these and their API keys").
-			Options(opts...).Value(&nf.providers).
+		// Height: the list's own, plus title and description. Left unset,
+		// huh takes those two lines off the list and hides its options.
+		fields = append(fields, huh.NewMultiSelect[string]().Title("Providers the sandbox may use").
+			Description("space selects one or more").
+			Options(opts...).Height(min(len(opts), 8)+2).Value(&nf.providers).
 			Validate(func(v []string) error {
 				if len(v) == 0 {
 					return errors.New("pick at least one")
@@ -90,13 +92,102 @@ func (m *model) startForm() tea.Cmd {
 			}))
 	}
 	m.nf = nf
+	// In a text field, tab completes the folder being typed, as in the copy
+	// prompt and a shell (huh's own key for that is ctrl+e); enter moves on.
+	// Where there's nothing to complete, tab moves on too (see updateForm).
+	km := huh.NewDefaultKeyMap()
+	km.Input.AcceptSuggestion = key.NewBinding(key.WithKeys("tab", "ctrl+e"), key.WithHelp("tab", "complete"))
+	km.Input.Next = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "next"))
+	km.MultiSelect.Toggle = key.NewBinding(key.WithKeys(km.MultiSelect.Toggle.Keys()...), key.WithHelp("space", "select"))
+	// The footer shows the keys (see formHints), not the form itself.
 	m.form = huh.NewForm(huh.NewGroup(fields...).Title("New sandbox")).
-		WithTheme(huh.ThemeFunc(huh.ThemeCharm)).WithShowHelp(true).WithWidth(min(max(m.w-8, 40), 90))
+		WithTheme(huh.ThemeFunc(huh.ThemeCharm)).WithKeyMap(km).WithShowHelp(false).WithWidth(min(max(m.w-8, 40), 90))
 	m.mode = formMode
-	return m.form.Init()
+	return tea.Batch(m.form.Init(), m.sizeForm())
+}
+
+// sizeForm tells the form how much room it has, so it shows every field
+// that fits and scrolls to the one in use otherwise.
+func (m *model) sizeForm() tea.Cmd {
+	if m.form == nil || m.w == 0 {
+		return nil
+	}
+	// header, status and footer (up to two lines), and the form's padding
+	f, cmd := m.form.Update(tea.WindowSizeMsg{Width: m.w, Height: max(m.h-7, 6)})
+	if ff, ok := f.(*huh.Form); ok {
+		m.form = ff
+	}
+	return cmd
+}
+
+// formUses reports whether the field in use has a job for key right now,
+// e.g. esc while filtering a list.
+func formUses(f *huh.Form, k string) bool {
+	if f == nil {
+		return false
+	}
+	for _, b := range f.KeyBinds() {
+		if !b.Enabled() {
+			continue
+		}
+		for _, bk := range b.Keys() {
+			if bk == k {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// formEnter says what enter does in the field in use: "next", "select",
+// "submit"…
+func formEnter(f *huh.Form) string {
+	for _, b := range f.KeyBinds() {
+		if !b.Enabled() {
+			continue
+		}
+		for _, k := range b.Keys() {
+			if k == "enter" {
+				return b.Help().Desc
+			}
+		}
+	}
+	return ""
+}
+
+// formHints lists the keys of the field in use, then how to leave.
+func formHints(f *huh.Form) [][2]string {
+	var out [][2]string
+	seen := map[string]bool{}
+	for _, b := range f.KeyBinds() {
+		h := b.Help()
+		if !b.Enabled() || h.Key == "" || seen[h.Key+h.Desc] {
+			continue
+		}
+		seen[h.Key+h.Desc] = true
+		desc := h.Desc
+		switch desc {
+		case "back":
+			desc = "previous field"
+		case "submit":
+			desc = "create"
+		}
+		out = append(out, [2]string{h.Key, desc})
+	}
+	if !formUses(f, "esc") {
+		out = append(out, [2]string{"esc", "cancel"})
+	}
+	return out
 }
 
 func (m *model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// tab moves on from a text field with nothing to complete. Never from
+	// the last field: there, moving on would create the sandbox.
+	if k, ok := msg.(tea.KeyPressMsg); ok && k.String() == "tab" && !formUses(m.form, "tab") {
+		if _, text := m.form.GetFocusedField().(*huh.Input); text && formEnter(m.form) == "next" {
+			msg = tea.KeyPressMsg{Code: tea.KeyEnter}
+		}
+	}
 	f, cmd := m.form.Update(msg)
 	if ff, ok := f.(*huh.Form); ok {
 		m.form = ff

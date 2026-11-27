@@ -30,7 +30,15 @@ type reporter struct {
 }
 
 func newReporter(ch events) reporter {
-	return reporter{ch: ch, log: &lines{emit: func(l string) { ch <- logMsg{l} }}}
+	// Log lines are dropped rather than waited for when the dashboard isn't
+	// reading (it stands still while a sandbox has the terminal): a build
+	// must never stall on its own output.
+	return reporter{ch: ch, log: &lines{emit: func(l string) {
+		select {
+		case ch <- logMsg{l}:
+		default:
+		}
+	}}}
 }
 
 func (r reporter) Note(m string)  { r.ch <- noteMsg{text: m} }
