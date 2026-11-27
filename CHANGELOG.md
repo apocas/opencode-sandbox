@@ -4,6 +4,21 @@ All notable changes to opencode-sandbox. Versions follow
 [Semantic Versioning](https://semver.org); each release is tagged `vX.Y.Z`.
 To update, see [Updating](README.md#updating).
 
+## [0.4.0] - 2026-11-27
+
+### Changed
+
+- Works with the bash that comes with macOS (3.2); bash 4.4 is no longer
+  required, so a Mac doesn't need Homebrew's bash.
+
+### Fixed
+
+- `--list` on macOS showed Docker's raw states ("Up 5 minutes",
+  "Exited (0) …") instead of open, closed and new: macOS's `sed` doesn't
+  understand `\t`.
+
+First tested on a Mac (arm64, Docker Desktop, the built-in bash 3.2).
+
 ## [0.3.0] - 2026-11-26
 
 ### Added
@@ -84,6 +99,7 @@ First release.
   `--resume` warns about sandboxes created by an older version.
 - Bundles opencode 2.4.2 (x86_64 and arm64 builds, checksums verified).
 
+[0.4.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.4.0
 [0.3.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.3.0
 [0.2.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.2.0
 [0.1.1]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.1.1

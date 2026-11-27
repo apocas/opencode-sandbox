@@ -22,7 +22,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-VERSION="0.3.0"  # bump with each release, see CHANGELOG.md
+VERSION="0.4.0"  # bump with each release, see CHANGELOG.md
 # Tagged with the launcher's version, so after an update the next run builds
 # the matching image by itself.
 IMAGE="opencode-sandbox:$VERSION"
@@ -207,8 +207,10 @@ home_keys() {  # key pairs in ~/.ssh
 # sandbox) and KEY_MODE: agent (host ssh-agent), file (key stored inside the
 # sandbox, only for disposable keys where no agent is possible) or none.
 choose_key() {
-  local want="$1" n i total; local -a keys=()
-  [[ -z "$AGENT_OK" ]] || mapfile -t keys < <(home_keys)
+  local want="$1" n i k total; local -a keys=()
+  if [[ -n "$AGENT_OK" ]]; then
+    while IFS= read -r k; do keys+=("$k"); done < <(home_keys)
+  fi
   total=$(( ${#keys[@]} + 2 ))
   if [[ -z "$want" ]]; then
     [[ -t 0 ]] || die "no terminal to ask which SSH key to use; pass -k NAME, -k new or -k none"
@@ -307,9 +309,9 @@ config_file() { printf '%s/configs/%s.json\n' "$RUNDIR" "$1"; }
 
 # Sets PROVIDERS: comma-separated provider ids from your opencode config.
 choose_providers() {
-  local want="$1" n i p total; local -a ids picked nums
+  local want="$1" n i p total; local -a ids=() picked nums
   jq -e . "$CONFIG" >/dev/null 2>&1 || die "cannot parse $CONFIG as JSON"
-  mapfile -t ids < <(provider_ids)
+  while IFS= read -r p; do ids+=("$p"); done < <(provider_ids)
   total=${#ids[@]}
   (( total )) || die "no providers are configured in $CONFIG"
   if [[ -z "$want" ]]; then
@@ -329,7 +331,7 @@ choose_providers() {
         read -rp "Choice [1-$total; several like 1,3]: " n || die "no choice made"
         n="${n// /}"; picked=()
         IFS=, read -ra nums <<<"$n"
-        for i in "${nums[@]}"; do
+        for i in ${nums[@]+"${nums[@]}"}; do
           [[ "$i" =~ ^[1-9][0-9]*$ ]] && (( i <= total )) || { picked=(); break; }
           picked+=("${ids[i-1]}")
         done
@@ -350,11 +352,11 @@ choose_providers() {
 # lives in $RUNDIR (RAM, user-only) and is regenerated on every start, so
 # changes to your config (e.g. a rotated API key) reach the sandbox.
 write_config() {  # $1 sandbox, $2 comma-separated providers
-  local out keep p; local -a ids want have=()
-  mapfile -t ids < <(provider_ids)
+  local out keep p; local -a ids=() want have=()
+  while IFS= read -r p; do ids+=("$p"); done < <(provider_ids)
   IFS=, read -ra want <<<"$2"
-  for p in "${want[@]}"; do
-    if printf '%s\n' "${ids[@]}" | grep -qxF -- "$p"; then have+=("$p")
+  for p in ${want[@]+"${want[@]}"}; do
+    if printf '%s\n' ${ids[@]+"${ids[@]}"} | grep -qxF -- "$p"; then have+=("$p")
     else note "provider '$p' is no longer in $CONFIG; sandbox '$1' won't get it"; fi
   done
   (( ${#have[@]} )) || die "none of sandbox '$1''s providers ($2) are in $CONFIG any more"
@@ -375,7 +377,7 @@ write_config() {  # $1 sandbox, $2 comma-separated providers
 seed_known_hosts() {
   local out="$HERE/known_hosts" h
   [[ -f "$out" ]] && return
-  for h in "${SEED_HOSTS[@]}"; do
+  for h in ${SEED_HOSTS[@]+"${SEED_HOSTS[@]}"}; do
     ssh-keygen -F "$h" -f "$HOME/.ssh/known_hosts" 2>/dev/null | grep -v '^#' || true
   done >"$out"
   chmod 644 "$out"
@@ -465,7 +467,7 @@ create_sandbox() {
     --label "opencode-sandbox.providers=$PROVIDERS" --label "opencode-sandbox.version=$VERSION" \
     --mount "type=bind,src=$(config_file "$name"),dst=/home/agent/.config/opencode/opencode.json,readonly" \
     --mount "type=bind,src=$HERE/known_hosts,dst=/etc/ssh/ssh_known_hosts,readonly" \
-    "${ssh[@]}" \
+    ${ssh[@]+"${ssh[@]}"} \
     "$IMAGE" opencode "$@" >/dev/null
 
   # Copy (never mount) the workspace in; -a keeps your uid so the agent can edit it.
@@ -506,11 +508,11 @@ open_sandbox() {
 }
 
 list_sandboxes() {
-  local numbered="${1:-}" rows
+  local numbered="${1:-}" rows t=$'\t'  # a real tab: macOS's sed doesn't know \t
   rows="$(docker ps -a --filter "label=$LABEL" --format "{{.Label \"$LABEL\"}}\t{{.Label \"opencode-sandbox.keykind\"}}\t{{.Label \"opencode-sandbox.key\"}}\t{{.Status}}\t{{.RunningFor}}\t{{.Label \"opencode-sandbox.source\"}}\t{{.Label \"opencode-sandbox.providers\"}}\t{{.Label \"opencode-sandbox.keymode\"}}")"
   if [[ -z "$rows" ]]; then echo "no sandboxes"; return; fi
-  sed -E 's/\tUp ([^\t]*)/\topen (\1)/; s/\tExited \([0-9-]+\) /\tclosed /; s/\tCreated\t/\tnew\t/
-          s/Less than a second( ago)?/just now/g; s/About an? (minute|hour)/1 \1/g; s/just now ago/just now/g' <<<"$rows" \
+  sed -E "s/${t}Up ([^$t]*)/${t}open (\1)/; s/${t}Exited \([0-9-]+\) /${t}closed /; s/${t}Created$t/${t}new$t/
+          s/Less than a second( ago)?/just now/g; s/About an? (minute|hour)/1 \1/g; s/just now ago/just now/g" <<<"$rows" \
     | awk -F'\t' -v n="$numbered" '
         function row(num, a, b, c, d, e, f) { printf "%s%-22s %-13s %-20s %-22s %-15s %s\n", num, a, b, c, d, e, f }
         BEGIN { row(n ? "#   " : "", "NAME", "SSH KEY", "PROVIDER", "STATE", "CREATED", "COPIED FROM") }
@@ -522,8 +524,8 @@ list_sandboxes() {
 }
 
 pick_sandbox() {
-  local -a all; local n
-  mapfile -t all < <(names)
+  local -a all=(); local n
+  while IFS= read -r n; do all+=("$n"); done < <(names)
   (( ${#all[@]} )) || die "no sandboxes yet; create one with: opencode-sandbox -w DIR"
   list_sandboxes numbered >&2
   read -rp "Resume which sandbox? [1-${#all[@]}] " n || die "no choice made"
@@ -535,7 +537,7 @@ remove_sandboxes() {
   local -a targets=("$@"); local n reply kind key fp
   (( ${#targets[@]} )) || die "--rm needs sandbox names, or --all"
   if [[ "${targets[0]}" == --all ]]; then
-    mapfile -t targets < <(names)
+    targets=(); while IFS= read -r n; do targets+=("$n"); done < <(names)
     (( ${#targets[@]} )) || { echo "no sandboxes"; return; }
     read -rp "Delete all ${#targets[@]} sandboxes, their files and disposable keys? [y/N] " reply || reply=""
     [[ "$reply" == [yY]* ]] || { echo "nothing deleted"; return; }
@@ -610,8 +612,6 @@ abandon_sandbox() {  # undo a half-finished creation
 # a disposable key stored inside them, or none. Hard requirements still die.
 check_platform() {
   local info
-  (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) )) \
-    || die "needs bash 4.4 or newer, this is $BASH_VERSION (on macOS: brew install bash)"
   command -v jq >/dev/null || die "needs jq (e.g. apt install jq, or brew install jq)"
   (( "$(id -u)" != 0 )) || die "don't run opencode-sandbox as root; sandboxes run with your uid"
   info="$(docker info --format '{{.OperatingSystem}}|{{json .SecurityOptions}}' 2>/dev/null)" \

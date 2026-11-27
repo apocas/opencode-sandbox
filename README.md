@@ -47,14 +47,19 @@ from `~/.ssh` are then never offered, because they would have to be copied in.
 Set `OPENCODE_SANDBOX_NO_AGENT=1` to use this mode anywhere.
 
 Tested on Ubuntu (x86_64) with Docker 29, OpenSSH 10.2 and opencode 2.4.2,
-including the no-agent mode (forced with `OPENCODE_SANDBOX_NO_AGENT=1`). Not yet
-tested on a Mac or on arm64: please report what you find.
+including the no-agent mode (forced with `OPENCODE_SANDBOX_NO_AGENT=1`), and on
+macOS (arm64) with Docker Desktop 29 and macOS's built-in bash 3.2. On the Mac,
+sandboxes were created, resumed, copied into and out of, and removed, but no
+full interactive opencode session has been run yet: please report what you
+find.
 
 ## Requirements
 
 - Docker, used as a regular user (not root).
-- bash 4.4+, `jq` and the OpenSSH client tools (`ssh-agent`, `ssh-add`,
-  `ssh-keygen`). On macOS (12.3 or newer): `brew install bash jq`.
+- bash 3.2 or newer (macOS's built-in bash is enough), `jq` and the OpenSSH
+  client tools (`ssh-agent`, `ssh-add`, `ssh-keygen`). On macOS (12.3 or
+  newer), only `jq` can be missing: recent versions include it, otherwise
+  `brew install jq`.
 - An opencode config at `~/.config/opencode/opencode.json` (plain JSON) with
   your provider(s) under `provider`. Providers you logged into with
   `opencode auth login` aren't passed to sandboxes.
