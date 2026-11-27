@@ -2,11 +2,15 @@
 // The docker CLI and Apple's container CLI implement it.
 package backend
 
-// Row is one sandbox as --list shows it.
+import "io"
+
+// Row is one sandbox as an engine lists it.
 type Row struct {
 	Name, KeyKind, Key, Status, Created, Source, Providers, KeyMode string
-	Runtime                                                         string // the OCI runtime it was created with ("" before 0.5.0)
-	Engine                                                          string // the Name of the engine it lives in
+
+	Runtime string // the OCI runtime it was created with ("" before 0.5.0)
+	Engine  string // the Name of the engine it lives in
+	Version string // the opencode-sandbox that created it ("" before 0.1)
 }
 
 // Bind mounts a host path into a container.
@@ -74,7 +78,8 @@ type Engine interface {
 	BindSources(container string) ([]string, error)
 
 	ImageExists(ref string) bool
-	Build(ref, contextDir string, buildArgs [][2]string, extra []string) error
+	// Build builds an image, writing the engine's output to out.
+	Build(ref, contextDir string, buildArgs [][2]string, extra []string, out io.Writer) error
 	// EnsureNetwork creates a network on which containers can't reach each
 	// other, unless it exists.
 	EnsureNetwork(name string) error

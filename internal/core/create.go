@@ -1,4 +1,4 @@
-package app
+package core
 
 import (
 	"bytes"
@@ -16,7 +16,6 @@ import (
 	"github.com/apocas/opencode-sandbox/internal/run"
 	"github.com/apocas/opencode-sandbox/internal/sshagent"
 	"github.com/apocas/opencode-sandbox/internal/state"
-	"github.com/apocas/opencode-sandbox/internal/tty"
 )
 
 // sandbox is a sandbox being created.
@@ -33,104 +32,101 @@ type sandbox struct {
 
 var validName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 
-// create makes a new sandbox from the command line and opens it.
-func (a *app) create(args []string) (int, error) {
-	var ws, name, keyArg, provArg string
-	i := 0
-parse:
-	for i < len(args) {
-		need := func(msg string) (string, error) {
-			if i+1 >= len(args) {
-				return "", errors.New(msg)
-			}
-			i += 2
-			return args[i-1], nil
-		}
-		var err error
-		switch args[i] {
-		case "-w":
-			ws, err = need("-w needs a directory")
-		case "-n":
-			name, err = need("-n needs a name")
-		case "-k":
-			keyArg, err = need("-k needs a key name, 'new' or 'none'")
-		case "-p":
-			provArg, err = need("-p needs a provider name (or several: a,b)")
-		case "-h", "--help":
-			a.usage(os.Stdout)
-			return 0, nil
-		case "--":
-			i++
-			break parse
-		default:
-			break parse
-		}
-		if err != nil {
-			return 0, err
-		}
-	}
-	opencodeArgs := args[i:]
+// CreateOptions describe a new sandbox. The interface decides them; see
+// KeyChoices and ProviderChoices for what there is to choose from.
+type CreateOptions struct {
+	Workspace string   // folder to copy in ("" for the current folder)
+	Name      string   // "" for the folder's name plus a random suffix
+	Key       string   // a key pair in ~/.ssh (name or path), "new" or "none"
+	Providers []string // provider ids; none for the only one configured
+	Args      []string // passed to opencode
+}
 
-	workspace, err := a.resolveWorkspace(ws)
-	if err != nil {
-		return 0, err
-	}
-	if name == "" {
-		name = a.defaultName(workspace)
-	}
-	if !validName.MatchString(name) {
-		return 0, fmt.Errorf("invalid sandbox name: %s", name)
-	}
-	if a.engineOf(name) != nil {
-		return 0, fmt.Errorf("sandbox '%s' already exists; use: opencode-sandbox --resume %s", name, name)
+// Created is what Create made.
+type Created struct {
+	Name string
+	// NewKey is a new disposable key to show the user, or nil.
+	NewKey *NewKey
+}
+
+// Create makes a new sandbox without opening it. If it fails, nothing of it
+// is left behind.
+func (a *Core) Create(o CreateOptions) (*Created, error) {
+	if err := a.CanCreate(); err != nil {
+		return nil, err
 	}
 	e := a.newE
-	if e == nil {
-		return 0, a.newErr
+	workspace, err := a.ResolveWorkspace(o.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	name := o.Name
+	if name == "" {
+		name = a.DefaultName(workspace)
+	}
+	if err := a.CheckName(name); err != nil {
+		return nil, err
 	}
 	sb := &sandbox{name: name, workspace: workspace}
-
-	if err := a.chooseKey(sb, keyArg); err != nil {
-		return 0, err
+	if o.Key == "" {
+		return nil, errors.New("no SSH key chosen; pass -k NAME, -k new or -k none")
 	}
-	if err := a.chooseProviders(sb, provArg); err != nil {
-		return 0, err
+	if err := a.chooseKey(sb, o.Key); err != nil {
+		return nil, err
 	}
+	if err := a.chooseProviders(sb, strings.Join(o.Providers, ",")); err != nil {
+		return nil, err
+	}
+	defer a.Rep.Done()
 	if err := a.prepare(e); err != nil {
-		return 0, err
+		return nil, err
 	}
 	// If creating the sandbox fails, leave nothing of it behind.
-	a.atExit = append(a.atExit, func() {
+	defer func() {
 		if !sb.created {
 			a.abandon(sb)
 		}
-	})
+	}()
+	a.Rep.Step(fmt.Sprintf("Creating sandbox '%s'", name))
 	if err := a.writeConfig(e, name, sb.providers); err != nil {
-		return 0, err
+		return nil, err
 	}
 	if sb.keyKind == "disposable" {
 		if err := a.newDisposableKey(sb); err != nil {
-			return 0, err
+			return nil, err
 		}
 		sb.keyCreated = true
 	}
 	if sb.keyMode == "agent" {
 		if err := a.agents.Ensure(name, sb.keyPath); err != nil {
-			return 0, err
+			return nil, err
 		}
 	}
-	if err := a.createContainer(e, sb, opencodeArgs); err != nil {
-		return 0, err
+	if err := a.createContainer(e, sb, o.Args); err != nil {
+		return nil, err
 	}
 	sb.created = true
+	c := &Created{Name: name}
 	if sb.keyKind == "disposable" {
-		a.showNewKey(sb)
+		c.NewKey = a.newKey(sb)
 	}
-	return a.open(e, name)
+	return c, nil
 }
 
-// resolveWorkspace checks the folder to copy into a new sandbox.
-func (a *app) resolveWorkspace(arg string) (string, error) {
+// CheckName refuses a name that isn't valid or is taken.
+func (a *Core) CheckName(name string) error {
+	if !validName.MatchString(name) {
+		return fmt.Errorf("invalid sandbox name: %s (letters, digits, _ . and -, starting with a letter or digit)", name)
+	}
+	if a.engineOf(name) != nil {
+		return fmt.Errorf("sandbox '%s' already exists; open it with: opencode-sandbox open %s", name, name)
+	}
+	return nil
+}
+
+// ResolveWorkspace checks the folder to copy into a new sandbox ("" for the
+// current folder) and returns its real path.
+func (a *Core) ResolveWorkspace(arg string) (string, error) {
 	p := arg
 	if p == "" {
 		p = os.Getenv("PWD")
@@ -151,8 +147,8 @@ func (a *app) resolveWorkspace(arg string) (string, error) {
 	return dir, nil
 }
 
-// defaultName is the folder's name plus a random suffix.
-func (a *app) defaultName(workspace string) string {
+// DefaultName is the folder's name plus a random suffix.
+func (a *Core) DefaultName(workspace string) string {
 	base := workspace[strings.LastIndexByte(workspace, '/')+1:]
 	base = strings.Map(func(r rune) rune {
 		if r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '.' || r == '-' {
@@ -173,56 +169,48 @@ func (a *app) defaultName(workspace string) string {
 	}
 }
 
-// chooseProviders sets sb.providers from want (comma-separated), asking when
-// it's empty and you have more than one provider.
-func (a *app) chooseProviders(sb *sandbox, want string) error {
+// ProviderChoices lists the providers in your opencode config.
+func (a *Core) ProviderChoices() ([]occonfig.Provider, error) {
+	root, err := a.loadConfig()
+	if err != nil {
+		return nil, err
+	}
+	return occonfig.Menu(root), nil
+}
+
+func (a *Core) loadConfig() (any, error) {
 	cfg := state.Config()
 	if !readable(cfg) {
-		return fmt.Errorf("missing %s", cfg)
+		return nil, fmt.Errorf("missing %s", cfg)
 	}
 	root, err := occonfig.Load(cfg)
 	if err != nil || root == nil || root == false {
-		return fmt.Errorf("cannot parse %s as JSON", cfg)
+		return nil, fmt.Errorf("cannot parse %s as JSON", cfg)
+	}
+	if len(occonfig.ProviderIDs(root)) == 0 {
+		return nil, fmt.Errorf("no providers are configured in %s", cfg)
+	}
+	return root, nil
+}
+
+// chooseProviders sets sb.providers from want (comma-separated); with
+// nothing chosen, the only provider configured.
+func (a *Core) chooseProviders(sb *sandbox, want string) error {
+	root, err := a.loadConfig()
+	if err != nil {
+		return err
 	}
 	ids := occonfig.ProviderIDs(root)
-	if len(ids) == 0 {
-		return fmt.Errorf("no providers are configured in %s", cfg)
-	}
 	if want == "" {
-		if len(ids) == 1 {
-			want = ids[0]
-			a.note("using the only provider in your opencode config: %s", want)
-		} else {
-			if !tty.StdinIsTerminal() {
-				return errors.New("no terminal to ask which opencode provider to use; pass -p NAME")
-			}
-			var b strings.Builder
-			fmt.Fprintf(&b, "Which opencode provider(s) may sandbox '%s' use?\n", sb.name)
-			for i, p := range occonfig.Menu(root) {
-				fmt.Fprintf(&b, "  %d) %-24s %s\n", i+1, tsv(p.ID), tsv(p.Description))
-			}
-			os.Stderr.WriteString(b.String())
-			for want == "" {
-				line, ok := tty.ReadLine(fmt.Sprintf("Choice [1-%d; several like 1,3]: ", len(ids)))
-				if !ok {
-					return errors.New("no choice made")
-				}
-				var picked []string
-				for _, f := range splitList(strings.ReplaceAll(line, " ", "")) {
-					n, ok := choice(f, len(ids))
-					if !ok {
-						picked = nil
-						break
-					}
-					picked = append(picked, ids[n-1])
-				}
-				want = strings.Join(picked, ",")
-			}
+		if len(ids) > 1 {
+			return fmt.Errorf("no provider chosen; pass -p NAME (have: %s)", strings.Join(ids, ","))
 		}
+		want = ids[0]
+		a.note("using the only provider in your opencode config: %s", want)
 	}
 	for _, p := range splitList(want) {
 		if !oneOf(p, ids...) {
-			return fmt.Errorf("no provider '%s' in %s (have: %s)", p, cfg, strings.Join(ids, ","))
+			return fmt.Errorf("no provider '%s' in %s (have: %s)", p, state.Config(), strings.Join(ids, ","))
 		}
 	}
 	sb.providers = want
@@ -238,7 +226,7 @@ func tsv(s string) string {
 // of yours. It lives in the runtime dir (RAM, user-only) and is regenerated
 // on every start, so changes to your config (e.g. a rotated API key) reach
 // the sandbox.
-func (a *app) writeConfig(e backend.Engine, name, providers string) error {
+func (a *Core) writeConfig(e backend.Engine, name, providers string) error {
 	cfg := state.Config()
 	root, _ := occonfig.Load(cfg)
 	ids := occonfig.ProviderIDs(root)
@@ -280,7 +268,7 @@ func (a *app) writeConfig(e backend.Engine, name, providers string) error {
 
 // prepare is everything a sandbox needs on the host before it is created or
 // resumed.
-func (a *app) prepare(e backend.Engine) error {
+func (a *Core) prepare(e backend.Engine) error {
 	if cfg := state.Config(); !readable(cfg) {
 		return fmt.Errorf("missing %s", cfg)
 	}
@@ -288,8 +276,9 @@ func (a *app) prepare(e backend.Engine) error {
 		return err
 	}
 	if !e.ImageExists(image()) {
+		a.Rep.Step(fmt.Sprintf("Building the sandbox image %s (the first time takes a few minutes)", image()))
 		if err := a.build(e, nil); err != nil {
-			return err
+			return fmt.Errorf("could not build the image: %w", err)
 		}
 	}
 	// Sandboxes share this network but cannot talk to each other (icc off).
@@ -304,7 +293,7 @@ func (a *app) prepare(e backend.Engine) error {
 // OPENCODE_SANDBOX_SEED_HOSTS from your ~/.ssh/known_hosts, so the first hop
 // (e.g. a jump host) is verified. It's read once; delete the file to re-seed.
 // A clone of the bash launcher kept its own copy, which is carried over.
-func (a *app) seedKnownHosts() error {
+func (a *Core) seedKnownHosts() error {
 	out := state.KnownHosts()
 	if isFile(out) {
 		return nil
@@ -338,14 +327,14 @@ func (a *app) seedKnownHosts() error {
 
 // createContainer creates the sandbox's container in engine e and copies the
 // workspace into it.
-func (a *app) createContainer(e backend.Engine, sb *sandbox, opencodeArgs []string) error {
+func (a *Core) createContainer(e backend.Engine, sb *sandbox, opencodeArgs []string) error {
 	term := os.Getenv("TERM")
 	if term == "" {
 		term = "xterm-256color"
 	}
 	s := backend.Spec{
 		Container: state.Prefix + sb.name,
-		TTY:       a.tty,
+		TTY:       a.TTY,
 		Labels: [][2]string{
 			{state.LabelName, sb.name},
 			{state.Label("source"), sb.workspace},
@@ -436,7 +425,7 @@ func writeSandboxDir(name string, config []byte) error {
 }
 
 // runtime is the OCI runtime new sandboxes run in; "" outside Docker.
-func (a *app) runtime() string {
+func (a *Core) runtime() string {
 	switch {
 	case a.newE == nil || a.newE.Name() != "docker":
 		return ""
@@ -447,7 +436,7 @@ func (a *app) runtime() string {
 }
 
 // abandon undoes a half-finished creation.
-func (a *app) abandon(sb *sandbox) {
+func (a *Core) abandon(sb *sandbox) {
 	_ = os.Remove(state.ConfigFile(sb.name))
 	_ = os.RemoveAll(state.SandboxDir(sb.name))
 	sshagent.Stop(state.AgentDir(sb.name))

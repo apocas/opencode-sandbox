@@ -76,11 +76,16 @@ func Status(err error) (int, error) {
 	return -1, err
 }
 
+// Stderr receives what engines and helper programs print when they fail. It
+// is the terminal's stderr, except where that would garble a full-screen
+// interface, which captures it instead.
+var Stderr io.Writer = os.Stderr
+
 // Output runs args with stderr passed through and returns stdout without
 // its trailing newlines, as $(...) does.
 func Output(r Runner, args ...string) (string, error) {
 	var out bytes.Buffer
-	if err := Check(r, &Cmd{Args: args, Stdout: &out, Stderr: os.Stderr}); err != nil {
+	if err := Check(r, &Cmd{Args: args, Stdout: &out, Stderr: Stderr}); err != nil {
 		return "", err
 	}
 	return strings.TrimRight(out.String(), "\n"), nil

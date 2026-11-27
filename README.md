@@ -33,7 +33,7 @@ down:
 - **Stronger boundaries where you have them.** On a Mac with Apple's
   [`container`](https://github.com/apple/container), every sandbox runs in a
   lightweight VM of its own. On Linux, sandboxes can run on
-  [gVisor](https://gvisor.dev), a separate user-space kernel. `--health` shows
+  [gVisor](https://gvisor.dev), a separate user-space kernel. `health` shows
   what this machine has and what you could install
   ([Isolation](#isolation)).
 - **As many sandboxes as you like.** Every run creates a new one. List them,
@@ -64,7 +64,7 @@ runc and gVisor.
 ## Isolation
 
 What separates a sandbox from your machine depends on what runs it.
-`opencode-sandbox --health` shows it for this machine, which stronger options
+`opencode-sandbox health` (or `h` in the dashboard) shows it for this machine, which stronger options
 it has, and what you could install for them.
 
 | Runs in | Boundary around a sandbox |
@@ -79,7 +79,7 @@ it has, and what you could install for them.
 On a Mac with Apple silicon and macOS 26 or later, install
 [Apple's container](https://github.com/apple/container/releases) and run
 `container system start`. New sandboxes then go there by themselves; ones made
-with Docker stay in Docker, and `--list` shows where each runs (RUNS IN). Set
+with Docker stay in Docker, and `ls` shows where each runs (RUNS IN). Set
 `OPENCODE_SANDBOX_ENGINE=docker` to keep using Docker for new ones.
 
 What's different there:
@@ -114,7 +114,7 @@ sudo systemctl reload docker
 - The OpenSSH client tools (`ssh-agent`, `ssh-add`, `ssh-keygen`), which Linux
   distributions and macOS include.
 - Linux or macOS, on x86_64 or arm64. To install from a git clone or with
-  `go install`, [Go](https://go.dev/dl/) 1.24 or newer.
+  `go install`, [Go](https://go.dev/dl/) 1.26 or newer.
 - An opencode config at `~/.config/opencode/opencode.json` (plain JSON) with
   your provider(s) under `provider`. Providers you logged into with
   `opencode auth login` aren't passed to sandboxes.
@@ -129,7 +129,7 @@ one way:
 check it against `SHA256SUMS`, and put it on your `PATH`:
 
 ```bash
-v=0.5.0 os=$(uname -s | tr A-Z a-z) arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+v=0.6.0 os=$(uname -s | tr A-Z a-z) arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 f=opencode-sandbox_${v}_${os}_${arch}
 curl -fLO https://github.com/apocas/opencode-sandbox/releases/download/v$v/$f
 curl -fL https://github.com/apocas/opencode-sandbox/releases/download/v$v/SHA256SUMS | grep " $f\$" | shasum -a 256 -c
@@ -153,13 +153,13 @@ cd opencode-sandbox && ln -s "$PWD/opencode-sandbox" ~/.local/bin/opencode-sandb
 opencode-sandbox --version
 ```
 
-The first run builds the Docker image (or run `opencode-sandbox --build`).
+The first run builds the Docker image (or run `opencode-sandbox build`).
 
 ## Updating
 
 Releases follow [Semantic Versioning](https://semver.org) and are tagged
 `vX.Y.Z`; see [CHANGELOG.md](CHANGELOG.md) for what changed in each.
-`opencode-sandbox --version` shows your version and the opencode release it
+`opencode-sandbox version` shows your version and the opencode release it
 bundles.
 
 Replace the binary with the new release's, run `go install` again, or update
@@ -169,55 +169,92 @@ your clone:
 cd /path/to/opencode-sandbox           # your clone
 git checkout master && git pull        # the latest code
 # or a specific release:
-git fetch --tags && git checkout v0.5.0
-opencode-sandbox --version
+git fetch --tags && git checkout v0.6.0
+opencode-sandbox version
 ```
 
 - The next run builds the image for the new version by itself (or run
-  `opencode-sandbox --build`).
+  `opencode-sandbox build`).
+- **Coming from 0.5 or earlier:** the commands are now subcommands, and
+  `opencode-sandbox` on its own opens the dashboard instead of creating a
+  sandbox: `--list` is now `ls`, `--resume` is `open`, `--pubkey` is `key`,
+  `--cp`/`--get`/`--rm`/`--shell`/`--build`/`--health` lost their dashes,
+  `--status` and `--stop-agent` are `agents` and `agents stop`, and creating a
+  sandbox is `new [DIR]` (no more `-w`). An old option tells you its new
+  command. Your sandboxes are unchanged.
 - **Coming from 0.4 or earlier:** new disposable keys and `known_hosts` are
   kept in `~/.local/share/opencode-sandbox/` instead of the clone. Sandboxes you
   already have still use the `keys/` and `known_hosts` in your clone, so keep
-  the clone until you've deleted them (`--rm` deletes their keys there too). An
+  the clone until you've deleted them (`rm` deletes their keys there too). An
   installed binary manages them as well. Run from the clone, the first new
   sandbox also copies the clone's `known_hosts`.
 - Sandboxes you already have keep the image and settings they were created
-  with; `--resume` tells you when a sandbox is older than the launcher. To move
-  to the new version, create a new sandbox and delete the old one with `--rm`.
+  with; `open` tells you when a sandbox is older than the launcher. To move
+  to the new version, create a new sandbox and delete the old one with `rm`.
 - Check the changelog before updating for anything you need to do.
 - Old images stay on disk: list them with `docker image ls opencode-sandbox`
-  and remove one with `docker image rm opencode-sandbox:OLD_VERSION` once no
-  sandbox uses it (Docker refuses while one does).
+  (or `container image list`) and remove one with
+  `docker image rm opencode-sandbox:OLD_VERSION` once no sandbox uses it.
 
 ## Quick start
 
 ```bash
-mkdir -p ~/agent-work && cd ~/agent-work
 opencode-sandbox
 ```
 
-You'll be asked which SSH key the sandbox may use and, if your config has more
-than one, which provider. opencode then opens with a copy of the folder at
-`/workspace`. (On macOS and Docker Desktop the key menu offers only a new
-disposable key or none.)
+On a terminal, this opens the dashboard: your sandboxes, kept up to date, with
+the details of the selected one. Press `n` to create a sandbox: pick the folder
+to copy, the SSH key it may use and, if your config has more than one, the
+providers. opencode then opens with a copy of the folder at `/workspace`; quit
+it and you're back in the dashboard.
 
 ```
-Which SSH key may sandbox 'agent-work-3f9a' use?
-  1) id_ed25519       (ED25519) SHA256:Xk3p... you@laptop
-  2) new disposable   a fresh key for this sandbox only, deleted with it
-  3) none             no SSH access
-Choice [1-3]:
+ opencode-sandbox 0.6.0   new → Apple container 1.7.1 · Docker 29.9.3      ? help
+╭ Sandboxes (3) ─────────────────────────────╮╭ api-7f3a ──────────────────────────╮
+│ ›   ● api-7f3a  open · 5 minutes    apple   ││ state        open · 5 minutes      │
+│     ○ infra     closed 3 days ago   docker  ││ runs in      a VM of its own       │
+│     ○ web-12bc  closed 2 hours ago  gvisor  ││ copied from  ~/src/api             │
+│                                             ││ ssh key      disposable, inside    │
+╰─────────────────────────────────────────────╯╰────────────────────────────────────╯
+ enter open · n new · s shell · c copy in · g get · p key · d delete · / filter · q quit
+```
+
+Or straight from the shell:
+
+```bash
+opencode-sandbox new ~/src/api                 # pick the key and provider
+opencode-sandbox new . -n api -k new -p my-provider
+opencode-sandbox open api                      # continue where you left off
 ```
 
 ## Usage
 
+### The dashboard
+
+| Key | |
+|---|---|
+| `↑` `↓` (`k` `j`) | move |
+| `enter` | open the sandbox, continuing its last session (or attach to it if it's open) |
+| `n` | create a sandbox |
+| `s` | bash inside the sandbox (it must be open) |
+| `c` / `g` | copy a file or folder into its `/workspace` / out of it, into the current folder |
+| `p` | show its public key (`y` copies it) |
+| `space`, `d` | mark sandboxes; delete the marked ones (or the selected one), after asking |
+| `/` | filter by name, folder or provider |
+| `h` | the health report (see [Isolation](#isolation)) |
+| `b` | rebuild the image for new sandboxes |
+| `?` | all keys |
+| `q` | quit (open sandboxes keep running in the background only if you detached them) |
+
+### Commands
+
 ```
-opencode-sandbox [-w DIR] [-n NAME] [-k KEY] [-p PROVIDER] [-- ARGS...]
+opencode-sandbox new [DIR] [-n NAME] [-k KEY] [-p PROVIDER] [-- ARGS...]
 ```
 
-| Option | |
+| Option of `new` | |
 |---|---|
-| `-w DIR` | folder to copy in (default: the current one). Your home folder, `~/.ssh` and similar are refused |
+| `DIR` | folder to copy in (default: the current one). Your home folder, `~/.ssh` and similar are refused |
 | `-n NAME` | sandbox name (default: folder name plus a random suffix) |
 | `-k KEY` | a key name from `~/.ssh`, `new` (disposable) or `none`; asked if omitted. Only `new` or `none` on [some platforms](#platforms) |
 | `-p PROVIDER` | provider id(s) from your opencode config, several as `a,b`; asked if omitted, automatic if you have only one |
@@ -225,37 +262,43 @@ opencode-sandbox [-w DIR] [-n NAME] [-k KEY] [-p PROVIDER] [-- ARGS...]
 
 | Command | |
 |---|---|
-| `--list` | list sandboxes with their key, provider and state |
-| `--resume [NAME]` | reopen a sandbox and continue its last session (pick from a list if no NAME) |
-| `--pubkey NAME` | print the public key a sandbox uses |
-| `--shell NAME` | bash inside an open sandbox |
-| `--cp NAME PATH...` | copy files or folders into a sandbox's `/workspace`, open or closed |
-| `--get NAME PATH...` | copy files or folders out of a sandbox (paths relative to `/workspace`) into the current folder |
-| `--rm NAME...` / `--rm --all` | delete sandboxes, their files and disposable keys |
-| `--status` | show the ssh-agents of open sandboxes |
-| `--stop-agent` | stop all sandbox ssh-agents |
-| `--health` | check that sandboxes can run here, show how they're isolated and what you could install to isolate them better |
-| `--build [ARGS]` | rebuild the image (ARGS go to `docker build`) |
-| `-h`, `--help` | full help |
+| `ls` | list sandboxes: state, what they run in, key, providers, age, folder |
+| `open [NAME]` | reopen a sandbox and continue its last session (asks which if no NAME) |
+| `shell NAME` | bash inside an open sandbox |
+| `key NAME` | print the public key a sandbox uses |
+| `cp NAME PATH...` | copy files or folders into a sandbox's `/workspace`, open or closed |
+| `get NAME PATH...` | copy files or folders out of a sandbox (paths relative to `/workspace`) into the current folder |
+| `rm NAME...` / `rm --all [-y]` | delete sandboxes, their files and disposable keys |
+| `health` | check that sandboxes can run here, show how they're isolated and what you could install to isolate them better |
+| `build [ARGS]` | rebuild the image (ARGS go to `docker build` or `container build`) |
+| `agents [stop]` | show (or stop) the ssh-agents of open sandboxes |
+| `help [COMMAND]` | help, or all options of a command |
+| `version` | the opencode-sandbox and opencode versions |
+
+On a terminal, commands ask with arrow-key menus and show progress; elsewhere
+(scripts, pipes) they print plain text and never ask: pass `-k`, `-p`, a NAME,
+or `-y`. Set `NO_COLOR=1` for no colors.
 
 Quitting opencode or closing the terminal stops the sandbox and unloads its key.
-Press `ctrl-]` `ctrl-]` to detach and leave it running; `--resume` reattaches.
+Press `ctrl-]` `ctrl-]` to detach and leave it running; `open` (or `enter` in
+the dashboard) reattaches. Apple container can't detach.
 
 ### Adding files later
 
 The folder is copied in once, when the sandbox is created: files you add to it
-afterwards don't reach the sandbox. Copy them in with `--cp`, even while
-opencode is running; it can use them straight away, no restart needed:
+afterwards don't reach the sandbox. Copy them in with `cp` (or `c` in the
+dashboard), even while opencode is running; it can use them straight away, no
+restart needed:
 
 ```bash
-opencode-sandbox --cp agent-work-3f9a ./logs.txt ./configs   # into /workspace
-opencode-sandbox --get agent-work-3f9a report.md             # out, into the current folder
+opencode-sandbox cp api ./logs.txt ./configs   # into /workspace
+opencode-sandbox get api report.md             # out, into the current folder
 ```
 
-`--cp` refuses the same paths as `-w` (your home folder, `~/.ssh`, `~/.config`
-and similar, and wherever disposable keys are kept). `--get` never overwrites a file, and
-won't write into those folders either. Whatever comes out was written by the
-agent, so treat it as untrusted.
+`cp` refuses the same paths as `new` (your home folder, `~/.ssh`, `~/.config`
+and similar, and wherever disposable keys are kept). `get` never overwrites a
+file, and won't write into those folders either. Whatever comes out was written
+by the agent, so treat it as untrusted.
 
 ## SSH through a jump host
 
@@ -309,7 +352,7 @@ Set `OPENCODE_SANDBOX_DEBUG=1` to see every command opencode-sandbox runs.
 In the sandbox:
 
 - `/workspace` and `/home/agent` (opencode's sessions) are volumes of their own,
-  kept until you `--rm` the sandbox.
+  kept until you `rm` the sandbox.
 - `~/.ssh` holds only the public key; `SSH_AUTH_SOCK` points at the mounted
   agent socket. A sandbox created with `-k none` gets neither.
 - Without a host agent, the disposable key is mounted read-only instead, copied
@@ -325,7 +368,7 @@ In the sandbox:
   server that trusts it. With `ssh -A`, so can root on the host you forward to.
 - **Without a host agent, the disposable key can be copied out.** Whatever runs
   in the sandbox can read it, and a copy keeps working wherever you authorized
-  it until you remove it from `authorized_keys`, even after `--rm`.
+  it until you remove it from `authorized_keys`, even after `rm`.
 - **The provider API key is readable inside the sandbox**, since opencode needs it.
 - **A sandbox's home persists until you delete it.** Something planted there runs
   again when you resume that sandbox.
@@ -349,7 +392,7 @@ In the sandbox:
 To use another opencode release, pass its version and archive checksums:
 
 ```bash
-opencode-sandbox --build --build-arg OPENCODE_VERSION=X.Y.Z \
+opencode-sandbox build --build-arg OPENCODE_VERSION=X.Y.Z \
   --build-arg OPENCODE_SHA256_AMD64=... --build-arg OPENCODE_SHA256_ARM64=...
 ```
 
@@ -369,7 +412,7 @@ CI runs all of this on every push.
 
 ## Releasing
 
-1. Bump `Version` in `internal/app/app.go` and add a section to
+1. Bump `Version` in `internal/core/core.go` and add a section to
    `CHANGELOG.md`.
 2. To bundle a newer opencode, update `OPENCODE_VERSION` and both checksums in
    the `Dockerfile`.

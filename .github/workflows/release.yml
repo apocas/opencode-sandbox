@@ -19,8 +19,8 @@ jobs:
         run: |
           set -euo pipefail
           v="${GITHUB_REF_NAME#v}"
-          grep -q "^const Version = \"$v\"$" internal/app/app.go \
-            || { echo "tag $GITHUB_REF_NAME doesn't match Version in internal/app/app.go" >&2; exit 1; }
+          grep -q "^const Version = \"$v\"$" internal/core/core.go \
+            || { echo "tag $GITHUB_REF_NAME doesn't match Version in internal/core/core.go" >&2; exit 1; }
           mkdir dist
           for os in linux darwin; do
             for arch in amd64 arm64; do

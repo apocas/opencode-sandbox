@@ -8,11 +8,35 @@ import (
 	"github.com/apocas/opencode-sandbox/internal/platform"
 )
 
-// Report writes the health report and returns false if sandboxes can't be
-// created here as things stand.
+// Doc is the health report: a title and sections of tagged items. OK is
+// false if sandboxes can't be created here as things stand.
+type Doc struct {
+	Title    string
+	Sections []Section
+	OK       bool
+}
+
+// Section is a titled list of items.
+type Section struct {
+	Title string
+	Items []Item
+}
+
+// Item is one line of the report: a tag ("ok", "no", "--", "used",
+// "available", "install", "start", "set up", "trade-off", or a label such
+// as "boundary") and its text. NBSP in the text marks spaces not to wrap at.
+type Item struct{ Tag, Text string }
+
+// Report writes the health report as plain text and returns Doc.OK.
 func Report(w io.Writer, f Facts) bool {
-	p := &printer{w: w}
-	fmt.Fprintf(w, "opencode-sandbox %s on %s (%s)\n", f.Version, f.System, f.Arch)
+	d := Build(f)
+	Plain(w, d)
+	return d.OK
+}
+
+// Build makes the health report from the facts.
+func Build(f Facts) Doc {
+	p := &printer{doc: &Doc{Title: fmt.Sprintf("opencode-sandbox %s on %s (%s)", f.Version, f.System, f.Arch)}}
 	ok := setup(p, f)
 	switch f.Engine {
 	case "docker":
@@ -21,7 +45,25 @@ func Report(w io.Writer, f Facts) bool {
 		appleIsolation(p, f)
 	}
 	options(p, f)
-	return ok
+	p.doc.OK = ok
+	return *p.doc
+}
+
+// Plain writes the report as plain text, wrapped to 80 columns.
+func Plain(w io.Writer, d Doc) {
+	fmt.Fprintln(w, d.Title)
+	for _, s := range d.Sections {
+		fmt.Fprintf(w, "\n%s\n", s.Title)
+		for _, it := range s.Items {
+			tag := it.Tag
+			for i, line := range wrap(it.Text, textWidth) {
+				if i > 0 {
+					tag = ""
+				}
+				fmt.Fprintf(w, "  %-*s %s\n", tagWidth, tag, strings.ReplaceAll(line, NBSP, " "))
+			}
+		}
+	}
 }
 
 func setup(p *printer, f Facts) bool {
@@ -294,30 +336,29 @@ func (f Facts) tilde(path string) string {
 	return path
 }
 
-// printer writes sections of tagged items, wrapped to fit 80 columns.
-type printer struct{ w io.Writer }
+// printer collects sections of tagged items.
+type printer struct{ doc *Doc }
 
 const (
 	tagWidth  = 10
 	textWidth = 79 - 2 - tagWidth - 1
 )
 
-func (p *printer) section(title string) { fmt.Fprintf(p.w, "\n%s\n", title) }
-
-func (p *printer) item(tag, text string) {
-	for i, line := range wrap(text, textWidth) {
-		if i > 0 {
-			tag = ""
-		}
-		fmt.Fprintf(p.w, "  %-*s %s\n", tagWidth, tag, strings.ReplaceAll(line, nbsp, " "))
-	}
+func (p *printer) section(title string) {
+	p.doc.Sections = append(p.doc.Sections, Section{Title: title})
 }
 
-// nbsp is a space wrap doesn't break at.
-const nbsp = "\x00"
+func (p *printer) item(tag, text string) {
+	s := &p.doc.Sections[len(p.doc.Sections)-1]
+	s.Items = append(s.Items, Item{Tag: tag, Text: text})
+}
+
+// NBSP marks a space not to wrap at, in commands to type; renderers show it
+// as a space.
+const NBSP = "\x00"
 
 // cmd quotes a command for the reader to type, kept on one line.
-func cmd(s string) string { return "`" + strings.ReplaceAll(s, " ", nbsp) + "`" }
+func cmd(s string) string { return "`" + strings.ReplaceAll(s, " ", NBSP) + "`" }
 
 // wrap breaks text into lines of at most width columns at spaces; a longer
 // word (a URL) gets a line of its own.

@@ -4,6 +4,41 @@ All notable changes to opencode-sandbox. Versions follow
 [Semantic Versioning](https://semver.org); each release is tagged `vX.Y.Z`.
 To update, see [Updating](README.md#updating).
 
+## [0.6.0] - 2026-11-27
+
+### Changed (breaking)
+
+- Commands are subcommands, and `opencode-sandbox` on its own opens the
+  dashboard (on a terminal) instead of creating a sandbox. An old option says
+  what replaced it.
+
+  | 0.5 | 0.6 |
+  |---|---|
+  | `opencode-sandbox [-w DIR] …` | `opencode-sandbox new [DIR] …` |
+  | `--list` | `ls` |
+  | `--resume [NAME]` | `open [NAME]` |
+  | `--pubkey NAME` | `key NAME` |
+  | `--shell`, `--cp`, `--get`, `--rm`, `--build`, `--health` | `shell`, `cp`, `get`, `rm`, `build`, `health` |
+  | `--status`, `--stop-agent` | `agents`, `agents stop` |
+  | `--help`, `--version` | `help`, `version` (the old spellings still work) |
+
+- Without a terminal, commands never ask: `new` needs `-k` (and `-p` with
+  several providers), `open` a name, and `rm --all` needs `-y`.
+- Requires Go 1.26 to build from source.
+
+### Added
+
+- A dashboard: your sandboxes, kept up to date, with the details of the
+  selected one (state, what isolates it, key and fingerprint, providers,
+  folder, age). Keys open (and come back when opencode quits or detaches),
+  create, shell, copy in and out, show the key, mark and delete, filter, show
+  the health report, and rebuild the image.
+- On a terminal, commands show arrow-key menus for the key, providers and
+  sandbox, spinners for long steps such as the first image build (with its
+  output if it fails), and colored, aligned tables. Colors follow a light or
+  dark terminal and `NO_COLOR`; piped output stays plain.
+- `help COMMAND` shows all options of a command.
+
 ## [0.5.0] - 2026-11-27
 
 ### Changed
@@ -151,6 +186,7 @@ First release.
   `--resume` warns about sandboxes created by an older version.
 - Bundles opencode 2.4.2 (x86_64 and arm64 builds, checksums verified).
 
+[0.6.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.6.0
 [0.5.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.5.0
 [0.4.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.4.0
 [0.3.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.3.0

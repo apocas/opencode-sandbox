@@ -1,14 +1,10 @@
-// Command opencode-sandbox runs opencode in hardened sandboxes (containers).
-// Each sandbox may use at most ONE SSH key, chosen when it is created: an
-// existing key pair from ~/.ssh, a new disposable key, or none. A private
-// key never enters a sandbox where a host ssh-agent can serve it. Folders are
-// copied into a sandbox, never mounted. See opencode-sandbox --help.
+// Command opencode-sandbox runs opencode in hardened sandboxes.
 package main
 
 import (
 	"os"
 
-	"github.com/apocas/opencode-sandbox/internal/app"
+	"github.com/apocas/opencode-sandbox/internal/cli"
 )
 
-func main() { os.Exit(app.Main(os.Args[1:])) }
+func main() { os.Exit(cli.Main(os.Args[1:])) }

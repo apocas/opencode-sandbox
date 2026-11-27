@@ -7,7 +7,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 bin="$here/.bin/opencode-sandbox"
 if [[ ! -x "$bin" || -n "$(find "$here" \( -path "$here/.bin" -o -path "$here/.git" \) -prune -o \
-      \( -name '*.go' -o -name go.mod -o -name Dockerfile -o -name entrypoint.sh -o -name ssh_config \) \
+      \( -name '*.go' -o -name go.mod -o -name go.sum -o -name Dockerfile -o -name entrypoint.sh -o -name ssh_config \) \
       -newer "$bin" -print -quit)" ]]; then
   command -v go >/dev/null || {
     echo "opencode-sandbox: this clone needs Go (https://go.dev/dl/) to build itself;" \

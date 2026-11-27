@@ -103,7 +103,7 @@ func (a Agents) Ensure(sandbox, key string) error {
 		return nil
 	}
 	a.onSock(sock, nil, "ssh-add", "-D")
-	load := &run.Cmd{Args: []string{"ssh-add", "-q", key}, Env: []string{"SSH_AUTH_SOCK=" + sock}, Stdout: os.Stdout, Stderr: os.Stderr}
+	load := &run.Cmd{Args: []string{"ssh-add", "-q", key}, Env: []string{"SSH_AUTH_SOCK=" + sock}, Stdout: run.Stderr, Stderr: run.Stderr}
 	if tty.StdinIsTerminal() {
 		load.Stdin = os.Stdin // may ask for the key's passphrase
 	}
@@ -171,7 +171,7 @@ func Fingerprint(r run.Runner, keyFile string) (string, error) {
 // e.g. "(ED25519) SHA256:abc… me@laptop".
 func Describe(r run.Runner, pubFile string) string {
 	var out bytes.Buffer
-	_, _ = r.Run(&run.Cmd{Args: []string{"ssh-keygen", "-lf", pubFile}, Stdout: &out, Stderr: os.Stderr})
+	_, _ = r.Run(&run.Cmd{Args: []string{"ssh-keygen", "-lf", pubFile}, Stdout: &out, Stderr: run.Stderr})
 	w := strings.Fields(strings.SplitN(out.String(), "\n", 2)[0])
 	if len(w) < 2 {
 		return ""

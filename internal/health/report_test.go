@@ -174,7 +174,7 @@ func TestReport(t *testing.T) {
 				if len(line) > 79 && !strings.Contains(line, "https://") {
 					t.Errorf("line longer than 79 columns: %q", line)
 				}
-				if strings.Contains(line, nbsp) || strings.HasSuffix(line, " ") {
+				if strings.Contains(line, NBSP) || strings.HasSuffix(line, " ") {
 					t.Errorf("stray space in %q", line)
 				}
 			}
@@ -187,7 +187,7 @@ func TestReport(t *testing.T) {
 
 func TestWrap(t *testing.T) {
 	got := wrap("aa bb  cc "+cmd("x y z")+" https://example.com/a/very/long/url", 8)
-	want := []string{"aa bb cc", "`x" + nbsp + "y" + nbsp + "z`", "https://example.com/a/very/long/url"}
+	want := []string{"aa bb cc", "`x" + NBSP + "y" + NBSP + "z`", "https://example.com/a/very/long/url"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("got %q, want %q", got, want)
 	}

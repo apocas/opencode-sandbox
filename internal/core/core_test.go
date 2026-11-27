@@ -1,4 +1,4 @@
-package app
+package core
 
 import (
 	"os"
@@ -31,15 +31,6 @@ func TestSplitListLikeBashRead(t *testing.T) {
 	}
 }
 
-func TestChoice(t *testing.T) {
-	for in, want := range map[string]int{"1": 1, "3": 3, "4": 0, "0": 0, "01": 0, "x": 0, "": 0, "99999999999999999999": 0} {
-		n, ok := choice(in, 3)
-		if (ok && n != want) || (!ok && want != 0) {
-			t.Errorf("%q: got %d %v, want %d", in, n, ok, want)
-		}
-	}
-}
-
 func TestFriendlyState(t *testing.T) {
 	for in, want := range map[string]string{
 		"Up 5 minutes":                        "open (5 minutes)",
@@ -51,8 +42,14 @@ func TestFriendlyState(t *testing.T) {
 		"Created":                             "new",
 		"Dead":                                "Dead",
 	} {
-		if got := friendlyState(in); got != want {
+		if _, got := friendlyState(in); got != want {
 			t.Errorf("%q: got %q, want %q", in, got, want)
+		}
+	}
+	for in, want := range map[string]State{"Up 5 minutes": StateOpen, "Up": StateOpen, "Exited (0) 2 hours ago": StateClosed,
+		"Exited": StateClosed, "Created": StateNew, "Dead": StateOther} {
+		if got, _ := friendlyState(in); got != want {
+			t.Errorf("%q: state %v, want %v", in, got, want)
 		}
 	}
 	if got := friendlyFix("Less than a second ago"); got != "just now" {
@@ -67,7 +64,7 @@ func TestCheckPath(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "")
 	clone := filepath.Join(home, "src/opencode-sandbox")
 	t.Setenv("OPENCODE_SANDBOX_LEGACY_DIR", clone)
-	a := &app{engines: []backend.Engine{&fakeEngine{rows: []backend.Row{{KeyKind: "disposable", Key: "/srv/old-clone/keys/x"}}}}}
+	a := &Core{engines: []backend.Engine{&fakeEngine{rows: []backend.Row{{KeyKind: "disposable", Key: "/srv/old-clone/keys/x"}}}}}
 
 	refused := []string{"/", home, filepath.Dir(home), home + "/.ssh", home + "/.ssh/sub", home + "/.local/share/opencode-sandbox",
 		clone, clone + "/keys", filepath.Join(home, "src"), "/srv/old-clone/keys", "/srv/old-clone", "/srv/old-clone/keys/x"}
@@ -88,7 +85,7 @@ func TestDiscardKeyOnlyTouchesItsOwnKey(t *testing.T) {
 	if _, err := exec.LookPath("ssh-keygen"); err != nil {
 		t.Skip("no ssh-keygen")
 	}
-	a := &app{r: run.OS{}}
+	a := &Core{r: run.OS{}}
 	d := t.TempDir()
 	keygen := func(path, comment string) {
 		_ = os.MkdirAll(filepath.Dir(path), 0o700)
@@ -130,9 +127,9 @@ func TestDiscardKeyOnlyTouchesItsOwnKey(t *testing.T) {
 }
 
 func TestDefaultNameSanitizes(t *testing.T) {
-	a := &app{engines: []backend.Engine{existsNever{&fakeEngine{}}}}
+	a := &Core{engines: []backend.Engine{existsNever{&fakeEngine{}}}}
 	for in, prefix := range map[string]string{"/w/my project": "my-project-", "/w/.hidden": "sb.hidden-", "/w/ok_1.2": "ok_1.2-", "/w/café": "caf--"} {
-		got := a.defaultName(in)
+		got := a.DefaultName(in)
 		if !strings.HasPrefix(got, prefix) || len(got) != len(prefix)+4 || !validName.MatchString(got) {
 			t.Errorf("%q: got %q, want %s + 4 hex digits", in, got, prefix)
 		}

@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
+	"io"
 	"strconv"
 	"strings"
 
@@ -32,7 +32,7 @@ func (d *Docker) output(args ...string) (string, error) {
 
 // check runs docker with stdout discarded and stderr shown.
 func (d *Docker) check(args ...string) error {
-	return run.Check(d.R, &run.Cmd{Args: append([]string{"docker"}, args...), Stderr: os.Stderr})
+	return run.Check(d.R, &run.Cmd{Args: append([]string{"docker"}, args...), Stderr: run.Stderr})
 }
 
 func (d *Docker) quiet(args ...string) int {
@@ -69,7 +69,7 @@ func (d *Docker) Rows(label string) ([]backend.Row, error) {
 	format := strings.Join([]string{
 		l(label), l("opencode-sandbox.keykind"), l("opencode-sandbox.key"), "{{.Status}}", "{{.RunningFor}}",
 		l("opencode-sandbox.source"), l("opencode-sandbox.providers"), l("opencode-sandbox.keymode"),
-		l("opencode-sandbox.runtime"),
+		l("opencode-sandbox.runtime"), l("opencode-sandbox.version"),
 	}, "\t")
 	out, err := d.output("ps", "-a", "--filter", "label="+label, "--format", format)
 	if err != nil {
@@ -77,10 +77,10 @@ func (d *Docker) Rows(label string) ([]backend.Row, error) {
 	}
 	var rows []backend.Row
 	for _, line := range lines(out) {
-		f := append(strings.Split(line, "\t"), make([]string, 9)...)
+		f := append(strings.Split(line, "\t"), make([]string, 10)...)
 		rows = append(rows, backend.Row{
 			Name: f[0], KeyKind: f[1], Key: f[2], Status: f[3], Created: f[4],
-			Source: f[5], Providers: f[6], KeyMode: f[7], Runtime: f[8], Engine: "docker",
+			Source: f[5], Providers: f[6], KeyMode: f[7], Runtime: f[8], Engine: "docker", Version: f[9],
 		})
 	}
 	return rows, nil
@@ -108,13 +108,13 @@ func (d *Docker) ImageExists(ref string) bool {
 	return d.quiet("image", "inspect", ref) == 0
 }
 
-func (d *Docker) Build(ref, contextDir string, buildArgs [][2]string, extra []string) error {
+func (d *Docker) Build(ref, contextDir string, buildArgs [][2]string, extra []string, out io.Writer) error {
 	args := []string{"docker", "build", "-t", ref}
 	for _, a := range buildArgs {
 		args = append(args, "--build-arg", a[0]+"="+a[1])
 	}
 	args = append(append(args, extra...), contextDir)
-	return run.Check(d.R, &run.Cmd{Args: args, Stdout: os.Stdout, Stderr: os.Stderr})
+	return run.Check(d.R, &run.Cmd{Args: args, Stdout: out, Stderr: out})
 }
 
 func (d *Docker) EnsureNetwork(name string) error {
@@ -185,7 +185,7 @@ func mountOpt(fields ...string) string {
 }
 
 func (d *Docker) Create(s backend.Spec) error {
-	return run.Check(d.R, &run.Cmd{Args: CreateArgs(s), Stderr: os.Stderr})
+	return run.Check(d.R, &run.Cmd{Args: CreateArgs(s), Stderr: run.Stderr})
 }
 
 func (d *Docker) Remove(c string) error { return d.check("rm", "-f", "-v", c) }

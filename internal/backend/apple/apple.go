@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"path"
 	"runtime"
@@ -80,7 +79,7 @@ func (a *Apple) output(args ...string) ([]byte, error) {
 
 // check runs container with stdout discarded and stderr shown.
 func (a *Apple) check(args ...string) error {
-	return run.Check(a.R, &run.Cmd{Args: a.cmd(args...), Stderr: os.Stderr})
+	return run.Check(a.R, &run.Cmd{Args: a.cmd(args...), Stderr: run.Stderr})
 }
 
 func (a *Apple) quiet(args ...string) int { return run.Quiet(a.R, a.cmd(args...)...) }
@@ -199,7 +198,7 @@ func (a *Apple) Rows(label string) ([]backend.Row, error) {
 			Status:  status(c, now),
 			Created: HumanDuration(now.Sub(c.Configuration.CreationDate)) + " ago",
 			Source:  l("source"), Providers: l("providers"), KeyMode: l("keymode"), Runtime: l("runtime"),
-			Engine: "apple",
+			Engine: "apple", Version: l("version"),
 		}
 	}
 	return rows, nil
@@ -268,13 +267,13 @@ func (a *Apple) BindSources(c string) ([]string, error) {
 
 func (a *Apple) ImageExists(ref string) bool { return a.quiet("image", "inspect", ref) == 0 }
 
-func (a *Apple) Build(ref, contextDir string, buildArgs [][2]string, extra []string) error {
+func (a *Apple) Build(ref, contextDir string, buildArgs [][2]string, extra []string, out io.Writer) error {
 	args := a.cmd("build", "-t", ref)
 	for _, b := range buildArgs {
 		args = append(args, "--build-arg", b[0]+"="+b[1])
 	}
 	args = append(append(args, extra...), contextDir)
-	return run.Check(a.R, &run.Cmd{Args: args, Stdout: os.Stdout, Stderr: os.Stderr})
+	return run.Check(a.R, &run.Cmd{Args: append(args[:2:2], append([]string{"--progress", "plain"}, args[2:]...)...), Stdout: out, Stderr: out})
 }
 
 // EnsureNetwork does nothing: Create gives every container a network of its
@@ -358,7 +357,7 @@ func (a *Apple) Create(s backend.Spec) error {
 	if err := a.check("network", "create", "--label", NetworkFor+"="+s.Container, s.Container); err != nil {
 		return err
 	}
-	helper := a.cmd("run", "--rm", "--user", "0", "--network", s.Container, "--entrypoint", "sh")
+	helper := a.cmd("run", "--rm", "--progress", "none", "--user", "0", "--network", s.Container, "--entrypoint", "sh")
 	script := ""
 	for i, dst := range s.Volumes {
 		vol := volumeName(s.Container, dst)
@@ -373,11 +372,11 @@ func (a *Apple) Create(s backend.Spec) error {
 	}
 	if script != "" {
 		helper = append(helper, s.Image, "-c", script+"true")
-		if err := run.Check(a.R, &run.Cmd{Args: helper, Stderr: os.Stderr}); err != nil {
+		if err := run.Check(a.R, &run.Cmd{Args: helper, Stderr: run.Stderr}); err != nil {
 			return err
 		}
 	}
-	if err := run.Check(a.R, &run.Cmd{Args: args, Stderr: os.Stderr}); err != nil {
+	if err := run.Check(a.R, &run.Cmd{Args: args, Stderr: run.Stderr}); err != nil {
 		return err
 	}
 	done = true
@@ -419,7 +418,7 @@ func (a *Apple) Stop(c string, timeoutSec int) error {
 // helperArgs runs a short-lived container with c's volumes at their places,
 // as the image's user, to reach the files of a stopped container.
 func (a *Apple) helperArgs(ct *container, interactive bool, cmd ...string) []string {
-	args := a.cmd("run", "--rm", "--network", ct.ID)
+	args := a.cmd("run", "--rm", "--progress", "none", "--network", ct.ID)
 	if interactive {
 		args = append(args, "-i")
 	}
@@ -446,7 +445,7 @@ func (a *Apple) CopyIn(c, src, dstDir string, keepOwner bool) error {
 	}
 	pr, pw := io.Pipe()
 	go func() { pw.CloseWithError(tarx.Write(pw, src)) }()
-	err = run.Check(a.R, &run.Cmd{Args: args, Stdin: pr, Stderr: os.Stderr})
+	err = run.Check(a.R, &run.Cmd{Args: args, Stdin: pr, Stderr: run.Stderr})
 	pr.Close()
 	return err
 }
@@ -471,7 +470,7 @@ func (a *Apple) CopyOut(c, src, hostDir string) error {
 		_, _ = io.Copy(io.Discard, pr) // let the sender finish
 		extracted <- err
 	}()
-	err = run.Check(a.R, &run.Cmd{Args: args, Stdout: pw, Stderr: os.Stderr})
+	err = run.Check(a.R, &run.Cmd{Args: args, Stdout: pw, Stderr: run.Stderr})
 	pw.Close()
 	if xerr := <-extracted; err == nil {
 		err = xerr

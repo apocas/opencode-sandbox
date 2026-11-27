@@ -41,12 +41,24 @@ refuse() {
   local desc="$1" pat="$2" out; shift 2
   if ! out="$("$@" 2>&1 </dev/null)" && grep -qE -- "$pat" <<<"$out"; then ok "$desc"; else bad "$desc" "$out"; fi
 }
-# pty INPUT CMD...: run CMD on a terminal, typing INPUT lines a second apart
+# pty KEYS CMD...: run CMD on a 120x30 terminal, pressing KEYS a second
+# apart after 3 seconds: enter, space, down, up, esc, wait (2 more seconds),
+# or text to type.
 pty() {
-  local input="$1"; shift
-  { sleep 3; while IFS= read -r l; do printf '%s\n' "$l"; sleep 1; done <<<"$input"; sleep 20; } \
-    | if [[ "$(uname)" == Darwin ]]; then script -q /dev/null "$@"; else script -qec "$(printf '%q ' "$@")" /dev/null; fi \
-    | tr -d '\r' | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g'
+  local keys="$1"; shift
+  local cmd; cmd="stty cols 120 rows 30 2>/dev/null; exec $(printf '%q ' "$@")"
+  {
+    sleep 3
+    for k in $keys; do
+      case "$k" in
+        enter) printf '\r' ;; space) printf ' ' ;; down) printf '\033[B' ;; up) printf '\033[A' ;;
+        esc) printf '\033' ;; wait) sleep 2 ;; *) printf '%s' "$k" ;;
+      esac
+      sleep 1
+    done
+    sleep 20
+  } | if [[ "$(uname)" == Darwin ]]; then script -q /dev/null bash -c "$cmd"; else script -qec "bash -c $(printf '%q' "$cmd")" /dev/null; fi \
+    | tr -d '\r' | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g; s/\x1b[]P_][^\x07\x1b]*\(\x07\|\x1b\\\\\)//g'
 }
 cleanup() {
   if command -v docker >/dev/null; then
@@ -66,7 +78,7 @@ trap cleanup EXIT
 # The engine new sandboxes go to, and a container's state in it ("running",
 # "exited"…).
 ENGINE=docker
-"$BIN" --health 2>/dev/null | grep -qE '^  used +Apple container' && ENGINE=apple
+"$BIN" health 2>/dev/null | grep -qE '^  used +Apple container' && ENGINE=apple
 state() {
   if [[ "$ENGINE" == apple ]]; then
     container inspect "$1" 2>/dev/null | grep -o '"state" *: *"[a-z]*"' | head -1 | sed 's/.*"\([a-z]*\)"$/\1/; s/^stopped$/exited/'
@@ -77,71 +89,80 @@ state() {
 echo "== engine: $ENGINE"
 
 echo "== basics"
-check  "--version" '^opencode-sandbox [0-9]+\.[0-9]+\.[0-9]+ \(opencode ' "$BIN" --version
-check  "--help" 'Usage: opencode-sandbox' "$BIN" --help
-refuse "unknown option" 'unknown option: --nope' "$BIN" --nope
-refuse "--rm without names" 'needs sandbox names' "$BIN" --rm
-refuse "-w needs a value" '-w needs a directory' "$BIN" -w
-refuse "unknown provider" "no provider 'bogus'" "$BIN" -w "$T/ws" -n it-x -k none -p bogus
-refuse "invalid name" 'invalid sandbox name' "$BIN" -w "$T/ws" -n '-bad' -k none
-refuse "home folder refused" 'contains your home directory' "$BIN" -w "$HOME" -k none
-refuse "~/.ssh refused" 'inside ~/.ssh' "$BIN" -w "$HOME/.ssh" -k none
-check  "--list empty" 'no sandboxes' "$BIN" --list
-check  "--health" 'used +(Docker|gVisor|Apple container)' "$BIN" --health
+check  "version" '^opencode-sandbox [0-9]+\.[0-9]+\.[0-9]+ \(opencode ' "$BIN" version
+check  "help" 'Usage: opencode-sandbox' "$BIN" help
+check  "help new" '-k KEY' "$BIN" help new
+refuse "unknown command" 'unknown command: nope' "$BIN" nope
+refuse "an old option names its command" '--list is now: opencode-sandbox ls' "$BIN" --list
+refuse "no dashboard without a terminal" 'Usage: opencode-sandbox' "$BIN"
+refuse "rm without names" 'needs sandbox names' "$BIN" rm
+refuse "-n needs a value" '-n needs a name' "$BIN" new -n
+refuse "unknown provider" "no provider 'bogus'" "$BIN" new "$T/ws" -n it-x -k none -p bogus
+refuse "invalid name" 'invalid sandbox name' "$BIN" new "$T/ws" -n '-bad' -k none
+refuse "home folder refused" 'contains your home directory' "$BIN" new "$HOME" -k none
+refuse "~/.ssh refused" 'inside ~/.ssh' "$BIN" new "$HOME/.ssh" -k none
+refuse "no key without a terminal" 'pass -k NAME' "$BIN" new "$T/ws" -n it-x
+check  "ls empty" 'no sandboxes' "$BIN" ls
+check  "health" 'used +(Docker|gVisor|Apple container)' "$BIN" health
 if [[ "$ENGINE" == apple ]]; then
-  DOCKER_HOST=unix:///nonexistent.sock check "--health without Docker" "only sandboxes made with it need it" "$BIN" --health
+  DOCKER_HOST=unix:///nonexistent.sock check "health without Docker" "only sandboxes made with it need it" "$BIN" health
 else
-  DOCKER_HOST=unix:///nonexistent.sock refuse "--health without Docker" "can't reach Docker" "$BIN" --health
+  DOCKER_HOST=unix:///nonexistent.sock refuse "health without Docker" "can't reach Docker" "$BIN" health
 fi
 
 echo "== create"
 cd "$T/ws"
-check "create with a disposable key" 'opencode v?[0-9]' "$BIN" -n it-a -k new -- --version
+check "create with a disposable key" 'opencode v?[0-9]' "$BIN" new -n it-a -k new -- --version
 [[ -f "$DATA/keys/it-a/id_ed25519" ]] && ok "disposable key in the data folder" || bad "disposable key in the data folder"
-check "create with no key" 'opencode v?[0-9]' "$BIN" -n it-b -k none -- --version
-check "--list" 'it-a +disposable.*closed' "$BIN" --list
+check "create with no key" 'opencode v?[0-9]' "$BIN" new . -n it-b -k none -- --version
+check "ls" 'it-a +closed.*disposable' "$BIN" ls
 runs_in=docker; [[ "${OPENCODE_SANDBOX_RUNTIME:-}" == *runsc* ]] && runs_in=gvisor; [[ "$ENGINE" == apple ]] && runs_in=apple
-check "--list shows what it runs in" "it-a .* $runs_in " "$BIN" --list
+check "ls shows what it runs in" "it-a .* $runs_in " "$BIN" ls
 if [[ -n "${OPENCODE_SANDBOX_RUNTIME:-}" ]]; then
   [[ "$(docker inspect -f '{{.HostConfig.Runtime}}' opencode-sandbox-it-a)" == "$OPENCODE_SANDBOX_RUNTIME" ]] \
     && ok "created with runtime $OPENCODE_SANDBOX_RUNTIME" || bad "created with runtime $OPENCODE_SANDBOX_RUNTIME"
 fi
-check "--pubkey" "$(cut -d' ' -f2 "$DATA/keys/it-a/id_ed25519.pub" | sed 's/[+/]/./g')" "$BIN" --pubkey it-a
-refuse "--pubkey of a keyless sandbox" 'has no SSH key' "$BIN" --pubkey it-b
-refuse "create an existing name" 'already exists' "$BIN" -n it-a -k none
+check "key" "$(cut -d' ' -f2 "$DATA/keys/it-a/id_ed25519.pub" | sed 's/[+/]/./g')" "$BIN" key it-a
+refuse "key of a keyless sandbox" 'has no SSH key' "$BIN" key it-b
+refuse "create an existing name" 'already exists' "$BIN" new -n it-a -k none
 
 echo "== copy"
-check  "--cp" 'copied .*extra.txt into it-a' "$BIN" --cp it-a "$T/extra.txt"
-refuse "--cp refuses ~/.ssh" 'inside ~/.ssh' "$BIN" --cp it-a "$HOME/.ssh"
-refuse "--cp refuses the key folder" 'disposable keys' "$BIN" --cp it-a "$DATA/keys"
+check  "cp" 'copied .*extra.txt into it-a' "$BIN" cp it-a "$T/extra.txt"
+refuse "cp refuses ~/.ssh" 'inside ~/.ssh' "$BIN" cp it-a "$HOME/.ssh"
+refuse "cp refuses the key folder" 'disposable keys' "$BIN" cp it-a "$DATA/keys"
 cd "$T/out"
-check  "--get" 'copied it-a:/workspace/sub' "$BIN" --get it-a a.txt extra.txt sub
-[[ "$(cat "$T/out/a.txt" "$T/out/extra.txt")" == $'hello\nextra' && -d "$T/out/sub" ]] && ok "--get contents" || bad "--get contents"
-refuse "--get never overwrites" 'already exists' "$BIN" --get it-a a.txt
-refuse "--get needs a name" 'name a file or folder' "$BIN" --get it-a /
+check  "get" 'copied it-a:/workspace/sub' "$BIN" get it-a a.txt extra.txt sub
+[[ "$(cat "$T/out/a.txt" "$T/out/extra.txt")" == $'hello\nextra' && -d "$T/out/sub" ]] && ok "get contents" || bad "get contents"
+refuse "get never overwrites" 'already exists' "$BIN" get it-a a.txt
+refuse "get needs a name" 'name a file or folder' "$BIN" get it-a /
 cd "$T/ws"
 
-echo "== resume and agents"
-check "--resume NAME" 'opencode v?[0-9]' "$BIN" --resume it-b
-out="$(printf '1\n' | "$BIN" --resume 2>&1)" && grep -qE 'opening sandbox' <<<"$out" && ok "--resume from the list" || bad "--resume from the list" "$out"
-check "--status" 'no sandbox agents running|sandbox ' "$BIN" --status
-check "--stop-agent" 'all sandbox ssh-agents stopped' "$BIN" --stop-agent
+echo "== open and agents"
+check  "open NAME" 'opencode v?[0-9]' "$BIN" open it-b
+refuse "open without a name or terminal" 'open needs a sandbox name' "$BIN" open
+check  "agents" 'no sandbox agents running|\(' "$BIN" agents
+check  "agents stop" 'all sandbox ssh-agents stopped' "$BIN" agents stop
 
-echo "== menus on a terminal"
+echo "== on a terminal"
 rm -f "$DATA/known_hosts"
-out="$(OPENCODE_SANDBOX_SEED_HOSTS="github.com" pty "2" "$BIN" -n it-c -- --version 2>&1)"
-grep -q 'Which SSH key' <<<"$out" && grep -q 'opening sandbox' <<<"$out" && ok "key menu" || bad "key menu" "$out"
+out="$(OPENCODE_SANDBOX_SEED_HOSTS="github.com" pty "enter" "$BIN" new -n it-c -- --version 2>&1)"
+grep -q 'Which SSH key' <<<"$out" && grep -q 'opening sandbox' <<<"$out" && ok "key picker" || bad "key picker" "$out"
 if ssh-keygen -F github.com -f "$HOME/.ssh/known_hosts" >/dev/null 2>&1; then
   [[ -s "$DATA/known_hosts" ]] && ok "seed hosts" || bad "seed hosts"
 fi
-out="$(OPENCODE_SANDBOX_CONFIG="$T/two.json" pty $'\n9\n2,1' "$BIN" -n it-d -k none -- --version 2>&1)"
-grep -q 'Which opencode provider' <<<"$out" && grep -q 'opening sandbox' <<<"$out" && ok "provider menu" || bad "provider menu" "$out"
-check "both providers chosen" 'it-d .*p2,p1' "$BIN" --list
+out="$(OPENCODE_SANDBOX_CONFIG="$T/two.json" pty "space down space enter" "$BIN" new -n it-d -k none -- --version 2>&1)"
+grep -q 'Which opencode providers' <<<"$out" && grep -q 'opening sandbox' <<<"$out" && ok "provider picker" || bad "provider picker" "$out"
+check "both providers chosen" 'it-d .*(p1,p2|p2,p1)' "$BIN" ls
+out="$(pty "enter" "$BIN" open 2>&1)"
+grep -q 'Open which sandbox' <<<"$out" && grep -q 'opening sandbox' <<<"$out" && ok "sandbox picker" || bad "sandbox picker" "$out"
+out="$(pty "h wait esc q" "$BIN" 2>&1)"
+grep -q 'Sandboxes (4)' <<<"$out" && grep -q 'it-d' <<<"$out" && grep -q 'How a new sandbox is isolated' <<<"$out" \
+  && ok "dashboard" || bad "dashboard" "$(tail -c 3000 <<<"$out")"
 
 echo "== closing the terminal stops the sandbox"
-pty "" "$BIN" -n it-h -k none >/dev/null 2>&1 &
+pty "" "$BIN" new -n it-h -k none >/dev/null 2>&1 &
 for _ in $(seq 60); do [[ "$(state opencode-sandbox-it-h)" == running ]] && break; sleep 1; done
-pid="$(pgrep -f -- "$BIN -n it-h" | head -1)"
+pid="$(pgrep -f -- "$BIN new -n it-h" | head -1)"
 if [[ -n "$pid" ]]; then
   kill -HUP "$pid"
   for _ in $(seq 30); do [[ "$(state opencode-sandbox-it-h)" == exited ]] && break; sleep 1; done
@@ -152,28 +173,31 @@ fi
 wait 2>/dev/null
 
 echo "== delete"
-check "--rm" 'removed it-a and its disposable key SHA256' "$BIN" --rm it-a it-b it-nope
+out="$("$BIN" rm it-a it-b it-nope 2>&1)"
+grep -q 'removed it-a and its disposable key SHA256' <<<"$out" && grep -q "no sandbox named 'it-nope'" <<<"$out" \
+  && ok "rm" || bad "rm" "$out"
 [[ ! -e "$DATA/keys/it-a" ]] && ok "disposable key deleted" || bad "disposable key deleted"
-out="$(printf 'y\n' | "$BIN" --rm --all 2>&1)" && grep -q 'removed it-c' <<<"$out" && ok "--rm --all" || bad "--rm --all" "$out"
-check "--list empty again" 'no sandboxes' "$BIN" --list
+refuse "rm --all needs -y without a terminal" 'add -y' "$BIN" rm --all
+check "rm --all -y" 'removed it-c' "$BIN" rm --all -y
+check "ls empty again" 'no sandboxes' "$BIN" ls
 
 if [[ -n "$OLD" && "$ENGINE" == docker ]]; then
   echo "== compatibility with $("$OLD" --version)"
   OLDDIR="$(cd "$(dirname "$OLD")" && pwd)"
   check "bash creates (disposable key)" 'opencode v?[0-9]' "$OLD" -n it-old-a -k new -- --version
   check "bash creates (no key)" 'opencode v?[0-9]' "$OLD" -n it-old-b -k none -- --version
-  check "Go lists them" 'it-old-a +disposable' "$BIN" --list
-  check "Go prints the bash key" "$(cut -d' ' -f2 "$OLDDIR/keys/it-old-a.pub" | sed 's/[+/]/./g')" "$BIN" --pubkey it-old-a
-  check "Go resumes a bash sandbox" 'opencode v?[0-9]' "$BIN" --resume it-old-a
+  check "Go lists them" 'it-old-a +closed.*disposable' "$BIN" ls
+  check "Go prints the bash key" "$(cut -d' ' -f2 "$OLDDIR/keys/it-old-a.pub" | sed 's/[+/]/./g')" "$BIN" key it-old-a
+  check "Go opens a bash sandbox" 'opencode v?[0-9]' "$BIN" open it-old-a
   mv "$OLDDIR/known_hosts" "$OLDDIR/known_hosts.moved"
-  refuse "Go explains a deleted clone" 'needs .*known_hosts, which no longer exists' "$BIN" --resume it-old-a
+  refuse "Go explains a deleted clone" 'needs .*known_hosts, which no longer exists' "$BIN" open it-old-a
   mv "$OLDDIR/known_hosts.moved" "$OLDDIR/known_hosts"
-  refuse "Go refuses the bash clone's keys" 'disposable keys' "$BIN" --cp it-old-b "$OLDDIR/keys"
-  check "Go copies into a bash sandbox" 'copied' "$BIN" --cp it-old-b "$T/extra.txt"
-  check "Go creates" 'opencode v?[0-9]' "$BIN" -n it-new -k new -- --version
+  refuse "Go refuses the bash clone's keys" 'disposable keys' "$BIN" cp it-old-b "$OLDDIR/keys"
+  check "Go copies into a bash sandbox" 'copied' "$BIN" cp it-old-b "$T/extra.txt"
+  check "Go creates" 'opencode v?[0-9]' "$BIN" new -n it-new -k new -- --version
   check "bash lists a Go sandbox" 'it-new +disposable' "$OLD" --list
   check "bash resumes a Go sandbox" 'opencode v?[0-9]' "$OLD" --resume it-new
-  check "Go deletes the bash sandboxes" 'removed it-old-a and its disposable key' "$BIN" --rm it-old-a it-old-b it-new
+  check "Go deletes the bash sandboxes" 'removed it-old-a and its disposable key' "$BIN" rm it-old-a it-old-b it-new
   [[ ! -e "$OLDDIR/keys/it-old-a" ]] && ok "bash's disposable key deleted" || bad "bash's disposable key deleted"
 fi
 

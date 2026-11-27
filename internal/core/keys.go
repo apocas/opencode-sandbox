@@ -1,7 +1,7 @@
-package app
+package core
 
 import (
-	"errors"
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,7 +13,6 @@ import (
 	"github.com/apocas/opencode-sandbox/internal/run"
 	"github.com/apocas/opencode-sandbox/internal/sshagent"
 	"github.com/apocas/opencode-sandbox/internal/state"
-	"github.com/apocas/opencode-sandbox/internal/tty"
 )
 
 // homeKeys lists the key pairs in ~/.ssh (private key paths).
@@ -34,53 +33,37 @@ func homeKeys() []string {
 
 var keyNameOK = regexp.MustCompile(`^[A-Za-z0-9._@+-]*$`)
 
-// chooseKey sets the sandbox's key from want (a key in ~/.ssh, "new" or
-// "none"), asking when it's empty.
-func (a *app) chooseKey(sb *sandbox, want string) error {
-	var keys []string
-	if a.plat.AgentOK {
-		keys = homeKeys()
-	}
-	total := len(keys) + 2
-	if want == "" {
-		if !tty.StdinIsTerminal() {
-			return errors.New("no terminal to ask which SSH key to use; pass -k NAME, -k new or -k none")
-		}
-		var b strings.Builder
-		fmt.Fprintf(&b, "Which SSH key may sandbox '%s' use?\n", sb.name)
-		if !a.plat.AgentOK {
-			why := fmt.Sprintf("(Keys from ~/.ssh aren't offered because %s: they would have to be copied into the sandbox. A new disposable key is stored inside it.)", a.plat.NoAgentWhy)
-			for _, line := range strings.Split(tty.Fold(why, 76), "\n") {
-				fmt.Fprintf(&b, "  %s\n", line)
-			}
-		}
-		for i, k := range keys {
-			fmt.Fprintf(&b, "  %d) %-16s %s\n", i+1, filepath.Base(k), sshagent.Describe(a.r, k+".pub"))
-		}
-		fmt.Fprintf(&b, "  %d) %-16s %s\n", total-1, "new disposable", "a fresh key for this sandbox only, deleted with it")
-		fmt.Fprintf(&b, "  %d) %-16s %s\n", total, "none", "no SSH access")
-		os.Stderr.WriteString(b.String())
-		var n int
-		for {
-			line, ok := tty.ReadLine(fmt.Sprintf("Choice [1-%d]: ", total))
-			if !ok {
-				return errors.New("no choice made")
-			}
-			var valid bool
-			if n, valid = choice(line, total); valid {
-				break
-			}
-		}
-		switch {
-		case n <= len(keys):
-			want = keys[n-1]
-		case n == total-1:
-			want = "new"
-		default:
-			want = "none"
-		}
-	}
+// KeyChoice is an SSH key a new sandbox may get.
+type KeyChoice struct {
+	Value  string // what -k takes: a key's name in ~/.ssh, "new" or "none"
+	Label  string
+	Detail string
+}
 
+// KeyChoices lists the SSH keys a new sandbox may get here, and why keys
+// from ~/.ssh aren't among them ("" when they are).
+func (a *Core) KeyChoices() ([]KeyChoice, string) {
+	var out []KeyChoice
+	why := ""
+	if a.plat.AgentOK {
+		for _, k := range homeKeys() {
+			out = append(out, KeyChoice{Value: filepath.Base(k), Label: filepath.Base(k), Detail: sshagent.Describe(a.r, k+".pub")})
+		}
+	} else {
+		why = fmt.Sprintf("Keys from ~/.ssh aren't offered because %s: they would have to be copied into the sandbox. A new disposable key is stored inside it.", a.plat.NoAgentWhy)
+	}
+	detail := "a fresh key for this sandbox only, kept on this machine and deleted with it"
+	if !a.plat.AgentOK {
+		detail = "a fresh key for this sandbox only, stored inside it and deleted with it"
+	}
+	return append(out,
+		KeyChoice{Value: "new", Label: "new disposable key", Detail: detail},
+		KeyChoice{Value: "none", Label: "none", Detail: "no SSH access"}), why
+}
+
+// chooseKey sets the sandbox's key from want: a key in ~/.ssh, "new" or
+// "none".
+func (a *Core) chooseKey(sb *sandbox, want string) error {
 	switch want {
 	case "none":
 		sb.keyKind, sb.keyPath, sb.keyName = "none", "none", ""
@@ -116,7 +99,7 @@ func (a *app) chooseKey(sb *sandbox, want string) error {
 	return nil
 }
 
-func (a *app) newDisposableKey(sb *sandbox) error {
+func (a *Core) newDisposableKey(sb *sandbox) error {
 	dir := filepath.Dir(sb.keyPath)
 	if err := state.MkdirPrivate(state.KeysDir(), dir); err != nil {
 		return err
@@ -125,12 +108,13 @@ func (a *app) newDisposableKey(sb *sandbox) error {
 		return fmt.Errorf("a disposable key '%s' already exists in %s (left from a deleted sandbox?); delete it first", sb.name, dir)
 	}
 	comment := fmt.Sprintf("opencode-sandbox-%s-%s", sb.name, time.Now().Format("2006-01-02"))
+	var out bytes.Buffer
 	err := run.Check(a.r, &run.Cmd{
 		Args:   []string{"ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", comment, "-f", sb.keyPath},
-		Stdout: os.Stdout, Stderr: os.Stderr,
+		Stdout: &out, Stderr: &out,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("ssh-keygen couldn't make a key: %s", strings.TrimSpace(out.String()))
 	}
 	// Mounted into the sandbox as a file in file mode: readable there even
 	// where Docker maps your files to another uid; the keys folder stays
@@ -145,7 +129,7 @@ func (a *app) newDisposableKey(sb *sandbox) error {
 // but a key that is plainly that sandbox's: at keys/NAME (the bash
 // launcher's layout) or keys/NAME/id_ed25519, and made by opencode-sandbox
 // for that sandbox.
-func (a *app) discardKey(name, key string) {
+func (a *Core) discardKey(name, key string) {
 	key = filepath.Clean(key)
 	dir := filepath.Dir(key)
 	legacy := filepath.Base(key) == name && filepath.Base(dir) == "keys"
@@ -167,31 +151,33 @@ func (a *app) discardKey(name, key string) {
 	}
 }
 
-func (a *app) showNewKey(sb *sandbox) {
-	var b strings.Builder
-	b.WriteString("\n")
-	dir := filepath.Dir(sb.keyPath)
-	if sb.keyMode == "file" {
-		b.WriteString(tty.Fold(fmt.Sprintf("Sandbox '%s' has a new disposable SSH key. Its private part is stored INSIDE the sandbox, because %s: anything running there can read and copy it. Authorize it only where that's acceptable, and remove it from authorized_keys when you delete the sandbox. A copy is kept in %s; both are deleted with the sandbox.", sb.name, a.plat.NoAgentWhy, dir), 78))
-		b.WriteString("\n")
-	} else {
-		fmt.Fprintf(&b, "Sandbox '%s' has a new disposable SSH key. The private part stays on this\n", sb.name)
-		fmt.Fprintf(&b, "machine in %s (never inside the sandbox) and is deleted with the sandbox.\n", dir)
-	}
-	b.WriteString("Authorize it where the sandbox may log in, e.g. in ~/.ssh/authorized_keys on the server:\n\n")
+// NewKey is a new disposable key, for the user to authorize where the
+// sandbox may log in.
+type NewKey struct {
+	Sandbox     string
+	PublicKey   string
+	Fingerprint string
+	Dir         string // where it's kept on this machine
+	// Inside: its private part is stored inside the sandbox too, because
+	// (Why) no host ssh-agent can serve it there.
+	Inside bool
+	Why    string
+}
+
+func (a *Core) newKey(sb *sandbox) *NewKey {
 	pub, _ := os.ReadFile(sb.keyPath + ".pub")
-	b.Write(pub)
-	fmt.Fprintf(&b, "\nPrint it again any time with: opencode-sandbox --pubkey %s\n", sb.name)
-	os.Stderr.WriteString(b.String())
-	if tty.StdinIsTerminal() {
-		tty.ReadLine("Press Enter to open the sandbox... ")
+	k := &NewKey{Sandbox: sb.name, PublicKey: strings.TrimSpace(string(pub)), Dir: filepath.Dir(sb.keyPath),
+		Fingerprint: a.quietFingerprint(sb.keyPath + ".pub")}
+	if sb.keyMode == "file" {
+		k.Inside, k.Why = true, a.plat.NoAgentWhy
 	}
+	return k
 }
 
 // checkPath refuses paths that would hand a sandbox your secrets, or let it
 // write among them: used for -w and --cp (what goes in) and for --get (where
 // files land). what is e.g. "copy" or "copy files into".
-func (a *app) checkPath(path, what string) error {
+func (a *Core) checkPath(path, what string) error {
 	home, err := state.ReadlinkF(state.Home())
 	if err != nil {
 		home = state.Home()
@@ -219,7 +205,7 @@ func (a *app) checkPath(path, what string) error {
 
 // keyDirs are the folders that hold disposable keys: this version's data
 // folder, a bash launcher's clone, and wherever existing sandboxes' keys are.
-func (a *app) keyDirs() []string {
+func (a *Core) keyDirs() []string {
 	if a.keyDirsCache != nil {
 		return a.keyDirsCache
 	}
