@@ -13,6 +13,52 @@ only talks to the **LLM provider you pick**, without ever holding its
   </picture>
 </p>
 
+## Try it
+
+**1. Install it.** Paste this into a terminal (macOS or Linux):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/apocas/opencode-sandbox/master/install.sh | sh
+```
+
+**2. Open a project in a sandbox.** Go to the project's folder and run `new`:
+
+```bash
+cd ~/my-project
+opencode-sandbox new
+```
+
+It asks which SSH key the sandbox may use (and which provider, if you have
+several), then opens opencode on a copy of the folder. Work as you usually do;
+quit opencode to close the sandbox. Your own folder is never touched.
+
+**3. Come back to it.** Run it on its own:
+
+```bash
+opencode-sandbox
+```
+
+It lists your sandboxes. Press `enter` on one to carry on where you left off,
+`g` to copy a file the agent made back to your machine, `?` for everything
+else.
+
+That's all. Two things it needs first:
+
+- **Something to run sandboxes in:**
+  [Docker](https://docs.docker.com/get-started/get-docker/), running; or, on a
+  Mac with Apple silicon and macOS 26 or later, Apple's `container`, which
+  `opencode-sandbox setup` installs for you.
+- **An opencode config with your provider** in
+  `~/.config/opencode/opencode.json`.
+
+`opencode-sandbox health` tells you what's missing. If your terminal says
+`opencode-sandbox: command not found` after installing, add the line the
+installer printed to your shell's startup file and open a new terminal. More
+in [Requirements](#requirements), [Install](#install) and
+[Quick start](#quick-start).
+
+## Why
+
 Coding agents are most useful when they can run commands, including `ssh` into
 your servers. That also means a confused or prompt-injected agent can use every
 key in your ssh-agent, read anything in your home directory, and send your code
