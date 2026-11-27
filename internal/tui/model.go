@@ -837,10 +837,15 @@ func expand(p string) string {
 	return p
 }
 
-// complete extends a path to the longest name it starts uniquely.
+// complete extends a path to the longest name it starts uniquely. It splits
+// the path as typed, not as expanded: "~" and "~/src/" expand to paths that
+// end in another name.
 func complete(p string) string {
-	full := expand(p)
-	dir, base := filepath.Split(full)
+	if p == "~" {
+		return "~/"
+	}
+	head, base := filepath.Split(p)
+	dir := expand(head)
 	if dir == "" {
 		dir = "."
 	}
@@ -867,5 +872,5 @@ func complete(p string) string {
 			common = common[:len(common)-1]
 		}
 	}
-	return p[:len(p)-len(base)] + common
+	return head + common
 }

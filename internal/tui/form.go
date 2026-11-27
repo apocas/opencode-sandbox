@@ -256,12 +256,14 @@ func (m *model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // dirSuggestions completes the folder being typed.
 func dirSuggestions(typed string) []string {
-	full := expand(typed)
-	dir, base := filepath.Split(full)
-	if dir == "" {
+	if typed == "~" {
+		return []string{"~/"}
+	}
+	head, base := filepath.Split(typed)
+	if head == "" {
 		return nil
 	}
-	ents, err := os.ReadDir(dir)
+	ents, err := os.ReadDir(expand(head))
 	if err != nil {
 		return nil
 	}
@@ -270,7 +272,7 @@ func dirSuggestions(typed string) []string {
 		if !e.IsDir() || !strings.HasPrefix(e.Name(), base) || strings.HasPrefix(e.Name(), ".") && !strings.HasPrefix(base, ".") {
 			continue
 		}
-		out = append(out, typed[:len(typed)-len(base)]+e.Name()+"/")
+		out = append(out, head+e.Name()+"/")
 	}
 	sort.Strings(out)
 	if len(out) > 50 {

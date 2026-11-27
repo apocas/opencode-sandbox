@@ -430,3 +430,50 @@ func TestFormNamesDotFiles(t *testing.T) {
 		t.Errorf("a folder that isn't there: %q", got)
 	}
 }
+
+// A folder typed with ~ is completed as typed. The form opens on "~" when
+// the dashboard is started in the home folder.
+func TestCompletingUnderHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, d := range []string{"Github/api", "Github/web", "Documents", ".ssh"} {
+		if err := os.MkdirAll(filepath.Join(home, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(home, "notes.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		typed string
+		want  []string
+	}{
+		{"~", []string{"~/"}},
+		{"~/", []string{"~/Documents/", "~/Github/"}},
+		{"~/G", []string{"~/Github/"}},
+		{"~/Github/", []string{"~/Github/api/", "~/Github/web/"}},
+		{"~/Github/a", []string{"~/Github/api/"}},
+		{"~/.", []string{"~/.ssh/"}},
+		{"~/x", nil},
+		{home + "/G", []string{home + "/Github/"}},
+		{"", nil},
+	} {
+		if got := dirSuggestions(c.typed); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("suggestions for %q: %q, want %q", c.typed, got, c.want)
+		}
+	}
+	for _, c := range [][2]string{
+		{"~", "~/"},
+		{"~/", "~/"},
+		{"~/G", "~/Github/"},
+		{"~/Github/", "~/Github/"},
+		{"~/Github/a", "~/Github/api/"},
+		{"~/n", "~/notes.txt"},
+		{"~/x", "~/x"},
+		{home + "/D", home + "/Documents/"},
+	} {
+		if got := complete(c[0]); got != c[1] {
+			t.Errorf("completing %q: %q, want %q", c[0], got, c[1])
+		}
+	}
+}

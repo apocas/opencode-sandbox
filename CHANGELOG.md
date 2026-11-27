@@ -4,6 +4,16 @@ All notable changes to opencode-sandbox. Versions follow
 [Semantic Versioning](https://semver.org); each release is tagged `vX.Y.Z`.
 To update, see [Updating](README.md#updating).
 
+## [0.9.2] - 2026-11-27
+
+### Fixed
+
+- The dashboard crashed (`slice bounds out of range`) when `n` was pressed
+  after starting it in your home folder: the form opens on `~`, and completing
+  that as a folder name failed. Tab in the copy prompt crashed the same way on
+  `~` and `~/`, and turned `~/src/` into `~/ssrc/`; the form offered no folders
+  after a `~/…/`. Now `~` completes to `~/` and what's under it as typed.
+
 ## [0.9.1] - 2026-11-27
 
 ### Security
@@ -309,6 +319,7 @@ First release.
   `--resume` warns about sandboxes created by an older version.
 - Bundles opencode 2.4.2 (x86_64 and arm64 builds, checksums verified).
 
+[0.9.2]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.9.2
 [0.9.1]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.9.1
 [0.9.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.9.0
 [0.8.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.8.0
