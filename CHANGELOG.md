@@ -4,6 +4,58 @@ All notable changes to opencode-sandbox. Versions follow
 [Semantic Versioning](https://semver.org); each release is tagged `vX.Y.Z`.
 To update, see [Updating](README.md#updating).
 
+## [0.5.0] - 2026-11-27
+
+### Changed
+
+- The image has no setuid or setgid programs, so nothing in a sandbox can gain
+  privileges even where `no-new-privileges` doesn't exist (Apple container).
+- opencode-sandbox is now a single Go program instead of a bash script. Its
+  commands, options, messages and sandbox labels are unchanged, and sandboxes
+  created by 0.1–0.4 keep working: list, resume, copy into and delete them as
+  before.
+- Install a release binary (built and attested by GitHub Actions), use
+  `go install`, or keep your git clone: its `opencode-sandbox` script now
+  builds the program when needed, which needs Go. bash and `jq` are no longer
+  needed.
+- New disposable keys and `known_hosts` are kept in
+  `~/.local/share/opencode-sandbox/` (or under `$XDG_DATA_HOME`) instead of the
+  clone. Sandboxes you already have keep using the clone's, so keep the clone
+  until you've deleted them; run from the clone, the first new sandbox copies
+  its `known_hosts`.
+
+### Added
+
+- Apple container: on a Mac with Apple silicon and macOS 26 or later where
+  Apple's `container` runs, new sandboxes go there, each in a lightweight VM
+  of its own on a network of its own (4 GB, 4 CPUs). Sandboxes made with
+  Docker stay there; `--list` shows where each runs. Set
+  `OPENCODE_SANDBOX_ENGINE=docker` to keep using Docker. Apple container can't
+  detach (`ctrl-]` `ctrl-]`) or open a sandbox in a second terminal.
+- gVisor: set `OPENCODE_SANDBOX_RUNTIME=runsc` (or any Docker runtime) to run
+  new sandboxes on gVisor, a user-space kernel for each sandbox. Keys from
+  `~/.ssh` need the runtime to have `--host-uds=open`; without it, sandboxes
+  get disposable keys stored inside them.
+- `--health` checks that sandboxes can run on this machine and shows how a new
+  one is isolated there (VM or kernel boundary, SSH keys, network, hardening),
+  which stronger isolation is available, and what to install for it.
+- `--list` has a RUNS IN column: docker, gvisor or apple.
+- `OPENCODE_SANDBOX_DEBUG=1` prints every command opencode-sandbox runs.
+- `--resume` explains when a file a sandbox mounts is gone (for example the
+  `known_hosts` of a deleted clone) instead of failing with Docker's error.
+- An integration test runs every command against a real Docker in CI, including
+  on sandboxes made by 0.4.0.
+
+### Fixed
+
+- `--cp` and `--get` failed on a closed sandbox that uses a host ssh-agent
+  (Linux), and on any closed sandbox after a reboot: Docker needs the files a
+  sandbox mounts, which only exist while it's open. Broken since 0.3.0.
+- `-w`, `--cp` and `--get` also refuse the folders that hold existing
+  sandboxes' disposable keys, wherever they are.
+- `--rm` deletes a disposable key only if it is plainly that sandbox's: in its
+  folder, under its name, and made by opencode-sandbox for it.
+
 ## [0.4.0] - 2026-11-27
 
 ### Changed
@@ -99,6 +151,7 @@ First release.
   `--resume` warns about sandboxes created by an older version.
 - Bundles opencode 2.4.2 (x86_64 and arm64 builds, checksums verified).
 
+[0.5.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.5.0
 [0.4.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.4.0
 [0.3.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.3.0
 [0.2.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.2.0

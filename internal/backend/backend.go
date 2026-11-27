@@ -1,0 +1,120 @@
+// Package backend describes what the launcher needs from a container engine.
+// The docker CLI and Apple's container CLI implement it.
+package backend
+
+// Row is one sandbox as --list shows it.
+type Row struct {
+	Name, KeyKind, Key, Status, Created, Source, Providers, KeyMode string
+	Runtime                                                         string // the OCI runtime it was created with ("" before 0.5.0)
+	Engine                                                          string // the Name of the engine it lives in
+}
+
+// Bind mounts a host path into a container.
+type Bind struct {
+	Src, Dst string
+	ReadOnly bool
+}
+
+// Spec describes a new sandbox container. Labels and Env keep their order.
+type Spec struct {
+	Container string // full container name
+	TTY       bool   // allocate a terminal (stdin is always kept open)
+	Labels    [][2]string
+	Env       [][2]string
+	Volumes   []string // destinations of anonymous volumes
+	Binds     []Bind
+	Tmpfs     []string // e.g. "/tmp:exec,size=1g,mode=1777"
+	Network   string
+	Runtime   string // OCI runtime, e.g. "runsc" for gVisor; "" for the default
+
+	Init            bool // a tiny init as PID 1 (signals, reaping)
+	ReadOnlyRoot    bool
+	DropAllCaps     bool
+	NoNewPrivileges bool
+	PidsLimit       int
+
+	Image string
+	Cmd   []string
+}
+
+// Caps are what an engine can do; the launcher works around what it can't.
+type Caps struct {
+	// FileBinds: single files can be bind-mounted (else only folders).
+	FileBinds bool
+	// Attach: a second terminal can attach to an open container, and a
+	// terminal can detach with DetachKeys.
+	Attach bool
+	// NoNewPrivileges and PidsLimit are enforced.
+	NoNewPrivileges, PidsLimit bool
+	// CopyNeedsBinds: copying into or out of a stopped container needs its
+	// bind-mount sources to exist (docker mounts them for the copy).
+	CopyNeedsBinds bool
+	// VMPerContainer: each container runs in a VM of its own.
+	VMPerContainer bool
+}
+
+// Engine is a container engine as the launcher uses it. Methods that fail
+// after the engine explained why on stderr return *run.ExitError.
+type Engine interface {
+	// Name is "docker" or "apple".
+	Name() string
+	Caps() Caps
+
+	// Exists reports whether the container exists.
+	Exists(container string) bool
+	// State is "running", "exited", "created"…, or "" if unknown.
+	State(container string) string
+	// Label reads one label of a container ("" if it isn't set).
+	Label(container, label string) (string, error)
+	// Names lists the value of label on every container that has it.
+	Names(label string) ([]string, error)
+	// Rows lists sandboxes for --list.
+	Rows(label string) ([]Row, error)
+	// BindSources lists the host paths a container bind-mounts.
+	BindSources(container string) ([]string, error)
+
+	ImageExists(ref string) bool
+	Build(ref, contextDir string, buildArgs [][2]string, extra []string) error
+	// EnsureNetwork creates a network on which containers can't reach each
+	// other, unless it exists.
+	EnsureNetwork(name string) error
+
+	Create(s Spec) error
+	Remove(container string) error // with its anonymous volumes
+	Stop(container string, timeoutSec int) error
+	// CopyIn copies src (a file or folder; "dir/." for its contents) into
+	// dstDir in the container, which may be stopped.
+	CopyIn(container, src, dstDir string, keepOwner bool) error
+	// CopyOut copies src from the container into hostDir.
+	CopyOut(container, src, hostDir string) error
+
+	// StartArgv starts a stopped container attached to the terminal;
+	// AttachArgv attaches to a running one (nil without Caps.Attach). Both
+	// detach on DetachKeys where the engine can.
+	StartArgv(container, detachKeys string) []string
+	AttachArgv(container, detachKeys string) []string
+	// ExecArgv runs a command in a running container.
+	ExecArgv(container string, tty bool, detachKeys string, cmd ...string) []string
+
+	// Info describes the engine; it fails when the engine can't be reached.
+	Info() (Info, error)
+}
+
+// Info describes a container engine.
+type Info struct {
+	OS      string // where it runs containers: "Docker Desktop", "Ubuntu 24.04", "Apple container"…
+	Version string
+	// SecurityOptions as Docker lists them: "name=seccomp,profile=builtin",
+	// "name=rootless", "name=userns"…
+	SecurityOptions []string
+	// Runtimes are the OCI runtimes the engine knows, by name.
+	Runtimes       map[string]Runtime
+	DefaultRuntime string
+}
+
+// Runtime is an OCI runtime: its program ("runc", "/usr/bin/runsc"…) and the
+// arguments the engine passes it.
+type Runtime struct {
+	Path string
+	Args []string
+}

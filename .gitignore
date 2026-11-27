@@ -1,3 +1,4 @@
 # Generated on each machine; never commit these.
 /keys/
 /known_hosts
+/.bin/

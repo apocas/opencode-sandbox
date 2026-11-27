@@ -1,0 +1,58 @@
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - run: go test ./...
+
+  # Every command against a real Docker (rootful, so the host ssh-agent mode
+  # is used), and against sandboxes made by the bash launcher of v0.4.0; then
+  # on gVisor, without host sockets (disposable keys inside) and with them
+  # (host ssh-agent).
+  integration:
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: ["", runsc, runsc-ssh]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install gVisor
+        if: matrix.runtime != ''
+        run: |
+          url=https://storage.googleapis.com/gvisor/releases/release/latest/$(uname -m)
+          curl -fsSL -o gvisor.tar.bz2 "$url/gvisor.tar.bz2"
+          curl -fsSL -o gvisor.tar.bz2.sha512 "$url/gvisor.tar.bz2.sha512"
+          sha512sum -c gvisor.tar.bz2.sha512
+          mkdir gvisor && tar -C gvisor -xjf gvisor.tar.bz2
+          sudo install -m 755 gvisor/runsc gvisor/containerd-shim-runsc-v1 /usr/local/bin/
+          sudo cp -r gvisor/gvisor-bin /usr/local/bin/
+          sudo /usr/local/bin/runsc install
+          sudo /usr/local/bin/runsc install --runtime runsc-ssh -- --host-uds=open
+          sudo systemctl restart docker
+          docker info --format '{{json .Runtimes}}'
+      - run: go build -o .bin/opencode-sandbox ./cmd/opencode-sandbox
+      - run: git worktree add /tmp/v040 v0.4.0
+      - run: test/integration.sh .bin/opencode-sandbox ${{ matrix.runtime == '' && '/tmp/v040/opencode-sandbox' || '' }}
+        env:
+          OPENCODE_SANDBOX_RUNTIME: ${{ matrix.runtime }}

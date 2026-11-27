@@ -6,7 +6,10 @@
 # ~/.ssh/sandbox_key instead.
 Host *
     IdentityFile ~/.ssh/sandbox_key
-    # Seeded host keys live in /etc/ssh/ssh_known_hosts (read-only); unknown
-    # hosts are learned on first use, changed keys are refused.
+    # Seeded host keys live in /etc/ssh/ssh_known_hosts, or in the sandbox's
+    # config folder where only folders can be mounted (Apple container); both
+    # are read-only. Unknown hosts are learned on first use, changed keys are
+    # refused.
+    GlobalKnownHostsFile /etc/ssh/ssh_known_hosts /run/opencode-sandbox/config/known_hosts
     StrictHostKeyChecking accept-new
     ServerAliveInterval 30

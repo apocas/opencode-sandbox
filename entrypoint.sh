@@ -2,11 +2,15 @@
 set -e
 
 # Where no ssh-agent on the host is possible (see the launcher), a sandbox gets
-# its disposable key as a read-only file. ssh wants a copy only this user can
-# read, and an agent inside the sandbox keeps `ssh -A` (jump hosts) working.
-if [ -r /run/opencode-sandbox/key ]; then
-  install -m 600 /run/opencode-sandbox/key "$HOME/.ssh/sandbox_key"
-  install -m 644 /run/opencode-sandbox/key.pub "$HOME/.ssh/sandbox_key.pub"
+# its disposable key as a read-only file, or in a read-only folder where only
+# folders can be mounted (Apple container). ssh wants a copy only this user
+# can read, and an agent inside the sandbox keeps `ssh -A` (jump hosts)
+# working.
+key=/run/opencode-sandbox/key
+[ -r "$key" ] || key=/run/opencode-sandbox/keydir/id_ed25519
+if [ -r "$key" ]; then
+  install -m 600 "$key" "$HOME/.ssh/sandbox_key"
+  install -m 644 "$key.pub" "$HOME/.ssh/sandbox_key.pub"
   rm -f "$SSH_AUTH_SOCK"
   ssh-agent -a "$SSH_AUTH_SOCK" >/dev/null
   ssh-add -q "$HOME/.ssh/sandbox_key"

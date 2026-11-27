@@ -40,7 +40,11 @@ RUN if g="$(getent group "${GID}")"; then groupmod -n agent "${g%%:*}"; \
  && install -d -o agent -g agent -m 700 /home/agent/.ssh \
  && install -d -o agent -g agent \
       /home/agent/.config/opencode /home/agent/.local/share/opencode \
-      /home/agent/.local/state /home/agent/.cache /workspace
+      /home/agent/.local/state /home/agent/.cache /workspace \
+ # No setuid or setgid programs: nothing in a sandbox can gain privileges,
+ # even where the engine can't forbid it (Apple container has no
+ # no-new-privileges).
+ && find / -xdev -type f -perm /6000 -exec chmod ug-s {} +
 
 COPY --chmod=644 ssh_config /etc/ssh/ssh_config.d/10-opencode-sandbox.conf
 COPY --chmod=755 entrypoint.sh /usr/local/bin/agent-entrypoint

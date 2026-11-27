@@ -1,7 +1,8 @@
 # opencode-sandbox
 
-Run [opencode](https://opencode.ai) in hardened Docker sandboxes where the agent
-can use **exactly one SSH key** (or none), works on a **copy** of your files, and
+Run [opencode](https://opencode.ai) in hardened sandboxes (Docker containers,
+or on a Mac a VM for each sandbox with Apple's `container`) where the agent can
+use **exactly one SSH key** (or none), works on a **copy** of your files, and
 only talks to the **LLM provider you pick**.
 
 Coding agents are most useful when they can run commands, including `ssh` into
@@ -27,8 +28,14 @@ down:
   opencode's built-in providers (such as its free hosted models) are switched
   off.
 - **Hardened container.** Non-root user, read-only root filesystem, all
-  capabilities dropped, `no-new-privileges`, a PID limit, and a Docker network
-  on which sandboxes can't reach each other.
+  capabilities dropped, no setuid programs, `no-new-privileges`, a PID limit,
+  and a network on which sandboxes can't reach each other.
+- **Stronger boundaries where you have them.** On a Mac with Apple's
+  [`container`](https://github.com/apple/container), every sandbox runs in a
+  lightweight VM of its own. On Linux, sandboxes can run on
+  [gVisor](https://gvisor.dev), a separate user-space kernel. `--health` shows
+  what this machine has and what you could install
+  ([Isolation](#isolation)).
 - **As many sandboxes as you like.** Every run creates a new one. List them,
   resume one (continuing its last opencode session), or delete them.
 
@@ -36,45 +43,117 @@ down:
 
 | Setup | SSH keys a sandbox can get |
 |---|---|
-| Linux with Docker Engine (rootful) | a key pair from `~/.ssh`, a disposable key, or none. Private keys never enter the sandbox. |
-| macOS; Docker Desktop on any OS (including Windows with WSL); rootless Docker; userns-remap | a disposable key, or none. The disposable key's private part is stored **inside** the sandbox. |
+| Linux with Docker Engine (rootful), also with gVisor if its runtime has `--host-uds=open` | a key pair from `~/.ssh`, a disposable key, or none. Private keys never enter the sandbox. |
+| macOS (Apple container or Docker Desktop); Docker Desktop on any OS (including Windows with WSL); rootless Docker; userns-remap; gVisor without `--host-uds=open` | a disposable key, or none. The disposable key's private part is stored **inside** the sandbox. |
 
-In the second group, Docker runs containers in a VM or under another uid, so a
-sandbox can't use an ssh-agent on your machine. (Docker Desktop's built-in SSH
+In the second group, sandboxes run in a VM, under another uid or in a kernel
+that can't reach sockets on your machine, so a sandbox can't use an ssh-agent
+on your machine. (Docker Desktop's built-in SSH
 passthrough would forward your *main* agent with all its keys, which is what
 this tool avoids.) opencode-sandbox detects this and switches by itself; keys
 from `~/.ssh` are then never offered, because they would have to be copied in.
 Set `OPENCODE_SANDBOX_NO_AGENT=1` to use this mode anywhere.
 
-Tested on Ubuntu (x86_64) with Docker 29, OpenSSH 10.2 and opencode 2.4.2,
-including the no-agent mode (forced with `OPENCODE_SANDBOX_NO_AGENT=1`), and on
-macOS (arm64) with Docker Desktop 29 and macOS's built-in bash 3.2. On the Mac,
-sandboxes were created, resumed, copied into and out of, and removed, but no
-full interactive opencode session has been run yet: please report what you
-find.
+Tested with opencode 2.4.2 on macOS 27 (arm64) with Apple container 1.7.1 and
+Docker Desktop 29, and on Linux (arm64, Docker 27) with runc and with gVisor
+(release-20261123), with and without `--host-uds=open`. Earlier versions were
+also tested on Ubuntu (x86_64) with Docker 29. `test/integration.sh` runs every
+command against a real Docker or Apple container; CI runs it on Linux with
+runc and gVisor.
+
+## Isolation
+
+What separates a sandbox from your machine depends on what runs it.
+`opencode-sandbox --health` shows it for this machine, which stronger options
+it has, and what you could install for them.
+
+| Runs in | Boundary around a sandbox |
+|---|---|
+| Docker Engine (Linux) | your kernel, shared with all containers: namespaces, seccomp, AppArmor or SELinux |
+| Docker with gVisor (Linux) | a user-space kernel of its own |
+| Docker Desktop (Mac, Windows, Linux) | one Linux VM, shared with all your containers |
+| Apple container (Mac) | a lightweight VM of its own |
+
+### Apple container (macOS)
+
+On a Mac with Apple silicon and macOS 26 or later, install
+[Apple's container](https://github.com/apple/container/releases) and run
+`container system start`. New sandboxes then go there by themselves; ones made
+with Docker stay in Docker, and `--list` shows where each runs (RUNS IN). Set
+`OPENCODE_SANDBOX_ENGINE=docker` to keep using Docker for new ones.
+
+What's different there:
+
+- Each sandbox is a VM with 4 GB of memory and 4 CPUs, on a network of its own.
+- No detaching: `ctrl-]` `ctrl-]` does nothing, and an open sandbox can't be
+  opened from a second terminal (`--shell` works).
+- There's no `no-new-privileges` or PID limit; the image has no setuid programs
+  and the VM contains the rest.
+- SSH keys are disposable or none, stored inside the sandbox, as with Docker
+  Desktop.
+- Copying into or out of a closed sandbox starts a short-lived helper VM.
+
+### gVisor (Linux)
+
+[Install gVisor](https://gvisor.dev/docs/user_guide/install/), register it
+with Docker (`sudo runsc install`, then `sudo systemctl reload docker`) and set
+`OPENCODE_SANDBOX_RUNTIME=runsc`. For keys from `~/.ssh` (a host ssh-agent),
+gVisor must be allowed to connect to the agent socket mounted into the
+sandbox. Register a second runtime for that, so other containers keep the
+stricter default, and use it with `OPENCODE_SANDBOX_RUNTIME=runsc-ssh`:
+
+```bash
+sudo runsc install --runtime runsc-ssh -- --host-uds=open
+sudo systemctl reload docker
+```
 
 ## Requirements
 
-- Docker, used as a regular user (not root).
-- bash 3.2 or newer (macOS's built-in bash is enough), `jq` and the OpenSSH
-  client tools (`ssh-agent`, `ssh-add`, `ssh-keygen`). On macOS (12.3 or
-  newer), only `jq` can be missing: recent versions include it, otherwise
-  `brew install jq`.
+- Docker, used as a regular user (not root); or on a Mac with Apple silicon and
+  macOS 26 or later, Apple's `container` instead (see [Isolation](#isolation)).
+- The OpenSSH client tools (`ssh-agent`, `ssh-add`, `ssh-keygen`), which Linux
+  distributions and macOS include.
+- Linux or macOS, on x86_64 or arm64. To install from a git clone or with
+  `go install`, [Go](https://go.dev/dl/) 1.24 or newer.
 - An opencode config at `~/.config/opencode/opencode.json` (plain JSON) with
   your provider(s) under `provider`. Providers you logged into with
   `opencode auth login` aren't passed to sandboxes.
 
 ## Install
 
+opencode-sandbox is a single program with nothing to install next to it. Pick
+one way:
+
+**A release binary.** Download the one for your system from the
+[latest release](https://github.com/apocas/opencode-sandbox/releases/latest),
+check it against `SHA256SUMS`, and put it on your `PATH`:
+
+```bash
+v=0.5.0 os=$(uname -s | tr A-Z a-z) arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+f=opencode-sandbox_${v}_${os}_${arch}
+curl -fLO https://github.com/apocas/opencode-sandbox/releases/download/v$v/$f
+curl -fL https://github.com/apocas/opencode-sandbox/releases/download/v$v/SHA256SUMS | grep " $f\$" | shasum -a 256 -c
+install -m 755 $f ~/.local/bin/opencode-sandbox && rm $f
+```
+
+The binaries are built by GitHub Actions from the tagged source, with a
+provenance attestation: `gh attestation verify ~/.local/bin/opencode-sandbox -R apocas/opencode-sandbox`
+shows which workflow and commit made yours.
+
+**With Go:** `go install github.com/apocas/opencode-sandbox/cmd/opencode-sandbox@latest`
+puts it in `~/go/bin`.
+
+**From a git clone,** as before 0.5.0. The `opencode-sandbox` script in the
+clone builds the program the first time you run it, and again after the sources
+change (this needs Go):
+
 ```bash
 git clone https://github.com/apocas/opencode-sandbox.git
-ln -s "$PWD/opencode-sandbox/opencode-sandbox" ~/.local/bin/opencode-sandbox
+cd opencode-sandbox && ln -s "$PWD/opencode-sandbox" ~/.local/bin/opencode-sandbox
 opencode-sandbox --version
 ```
 
-The first run builds the Docker image (or run `opencode-sandbox --build`). To
-install a specific release rather than the latest code, add `--branch v0.1.0`
-to the `git clone`.
+The first run builds the Docker image (or run `opencode-sandbox --build`).
 
 ## Updating
 
@@ -83,17 +162,25 @@ Releases follow [Semantic Versioning](https://semver.org) and are tagged
 `opencode-sandbox --version` shows your version and the opencode release it
 bundles.
 
+Replace the binary with the new release's, run `go install` again, or update
+your clone:
+
 ```bash
 cd /path/to/opencode-sandbox           # your clone
 git checkout master && git pull        # the latest code
 # or a specific release:
-git fetch --tags && git checkout v0.2.0
+git fetch --tags && git checkout v0.5.0
 opencode-sandbox --version
 ```
 
 - The next run builds the image for the new version by itself (or run
-  `opencode-sandbox --build`). Your `keys/` and `known_hosts` are untouched,
-  since git ignores them.
+  `opencode-sandbox --build`).
+- **Coming from 0.4 or earlier:** new disposable keys and `known_hosts` are
+  kept in `~/.local/share/opencode-sandbox/` instead of the clone. Sandboxes you
+  already have still use the `keys/` and `known_hosts` in your clone, so keep
+  the clone until you've deleted them (`--rm` deletes their keys there too). An
+  installed binary manages them as well. Run from the clone, the first new
+  sandbox also copies the clone's `known_hosts`.
 - Sandboxes you already have keep the image and settings they were created
   with; `--resume` tells you when a sandbox is older than the launcher. To move
   to the new version, create a new sandbox and delete the old one with `--rm`.
@@ -147,6 +234,7 @@ opencode-sandbox [-w DIR] [-n NAME] [-k KEY] [-p PROVIDER] [-- ARGS...]
 | `--rm NAME...` / `--rm --all` | delete sandboxes, their files and disposable keys |
 | `--status` | show the ssh-agents of open sandboxes |
 | `--stop-agent` | stop all sandbox ssh-agents |
+| `--health` | check that sandboxes can run here, show how they're isolated and what you could install to isolate them better |
 | `--build [ARGS]` | rebuild the image (ARGS go to `docker build`) |
 | `-h`, `--help` | full help |
 
@@ -165,7 +253,7 @@ opencode-sandbox --get agent-work-3f9a report.md             # out, into the cur
 ```
 
 `--cp` refuses the same paths as `-w` (your home folder, `~/.ssh`, `~/.config`
-and similar, and this tool's own folder). `--get` never overwrites a file, and
+and similar, and wherever disposable keys are kept). `--get` never overwrites a file, and
 won't write into those folders either. Whatever comes out was written by the
 agent, so treat it as untrusted.
 
@@ -207,8 +295,16 @@ Runtime files live in `$XDG_RUNTIME_DIR/opencode-sandbox/`, or
 - `configs/NAME.json`: the sandbox's filtered opencode config, in a directory
   only you can open. It's regenerated from your config every time the sandbox
   starts, so a rotated API key is picked up.
-- `keys/` and `known_hosts` next to the script: disposable keys and seeded host
-  keys. Both are git-ignored.
+- `sandboxes/NAME/`: the same for a sandbox in Apple container, which can only
+  mount folders: its config and a copy of `known_hosts`.
+Persistent files live in `$XDG_DATA_HOME/opencode-sandbox/`, by default
+`~/.local/share/opencode-sandbox/`:
+
+- `keys/NAME/`: a sandbox's disposable key pair, in a folder only you can open,
+  deleted with the sandbox.
+- `known_hosts`: the seeded host keys every sandbox trusts.
+
+Set `OPENCODE_SANDBOX_DEBUG=1` to see every command opencode-sandbox runs.
 
 In the sandbox:
 
@@ -235,7 +331,9 @@ In the sandbox:
   again when you resume that sandbox.
 - **Prompt injection.** Text in files or command output can try to steer the
   agent. Limiting its key and providers limits the damage, but doesn't prevent it.
-- **Containers share the host kernel.** For genuinely hostile code, use a VM.
+- **With Docker, sandboxes share a kernel**: your machine's on Linux, Docker
+  Desktop's VM elsewhere. For genuinely hostile code, use Apple container on a
+  Mac (a VM for each sandbox) or gVisor on Linux ([Isolation](#isolation)).
 
 ## Configuration
 
@@ -244,6 +342,9 @@ In the sandbox:
 | `OPENCODE_SANDBOX_CONFIG` | opencode config to take providers from (default `~/.config/opencode/opencode.json`) |
 | `OPENCODE_SANDBOX_NO_AGENT` | `1` to use the no-agent mode ([Platforms](#platforms)) even where a host ssh-agent would work |
 | `OPENCODE_SANDBOX_SEED_HOSTS` | space-separated hosts whose keys are copied from `~/.ssh/known_hosts` into sandboxes; read when `known_hosts` is created, delete it to re-seed |
+| `OPENCODE_SANDBOX_ENGINE` | `docker` or `apple`: where new sandboxes go (default: Apple container where it runs, else Docker) |
+| `OPENCODE_SANDBOX_RUNTIME` | a Docker runtime for new sandboxes, e.g. `runsc` for gVisor ([Isolation](#isolation)) |
+| `OPENCODE_SANDBOX_DEBUG` | `1` to print every command opencode-sandbox runs |
 
 To use another opencode release, pass its version and archive checksums:
 
@@ -254,15 +355,28 @@ opencode-sandbox --build --build-arg OPENCODE_VERSION=X.Y.Z \
 
 Existing sandboxes keep the image they were created with.
 
+## Development
+
+```bash
+go vet ./... && go test ./...                       # unit tests (no Docker)
+go build -o .bin/opencode-sandbox ./cmd/opencode-sandbox
+test/integration.sh .bin/opencode-sandbox          # against a real Docker
+```
+
+To also check compatibility with the bash launcher, pass a checkout of v0.4.0:
+`git worktree add /tmp/v040 v0.4.0 && test/integration.sh .bin/opencode-sandbox /tmp/v040/opencode-sandbox`.
+CI runs all of this on every push.
+
 ## Releasing
 
-1. Bump `VERSION` at the top of `opencode-sandbox` and add a section to
+1. Bump `Version` in `internal/app/app.go` and add a section to
    `CHANGELOG.md`.
 2. To bundle a newer opencode, update `OPENCODE_VERSION` and both checksums in
    the `Dockerfile`.
 3. Commit, tag and push:
-   `git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin master vX.Y.Z`, then
-   create the GitHub release from that tag.
+   `git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin master vX.Y.Z`. The
+   release workflow builds the binaries, attests them and creates the GitHub
+   release with that version's changelog section.
 
 ## License
 
