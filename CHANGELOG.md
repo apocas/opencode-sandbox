@@ -4,6 +4,21 @@ All notable changes to opencode-sandbox. Versions follow
 [Semantic Versioning](https://semver.org); each release is tagged `vX.Y.Z`.
 To update, see [Updating](README.md#updating).
 
+## [0.7.0] - 2026-11-27
+
+### Added
+
+- `opencode-sandbox update` updates the program itself: it downloads the latest
+  release's binary for this system, checks it against the release's
+  `SHA256SUMS` and that it runs, and only then replaces the one in use
+  (`--check` only says whether there's something newer). Where opencode-sandbox
+  runs from a git clone, it runs `git pull --ff-only` there and rebuilds.
+- `install.sh` installs the latest release in one line:
+  `curl -fsSL https://raw.githubusercontent.com/apocas/opencode-sandbox/master/install.sh | sh`.
+  It checks the download against `SHA256SUMS` and puts it in `~/.local/bin`
+  (or `OPENCODE_SANDBOX_INSTALL_DIR`; `OPENCODE_SANDBOX_VERSION` picks a
+  version). Running it again updates, also from versions without `update`.
+
 ## [0.6.1] - 2026-11-27
 
 ### Fixed
@@ -204,6 +219,7 @@ First release.
   `--resume` warns about sandboxes created by an older version.
 - Bundles opencode 2.4.2 (x86_64 and arm64 builds, checksums verified).
 
+[0.7.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.7.0
 [0.6.1]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.6.1
 [0.6.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.6.0
 [0.5.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.5.0

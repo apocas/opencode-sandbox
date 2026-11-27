@@ -4,10 +4,12 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
 	"syscall"
 
@@ -17,6 +19,7 @@ import (
 	"github.com/apocas/opencode-sandbox/internal/health"
 	"github.com/apocas/opencode-sandbox/internal/platform"
 	"github.com/apocas/opencode-sandbox/internal/run"
+	"github.com/apocas/opencode-sandbox/internal/selfupdate"
 	"github.com/apocas/opencode-sandbox/internal/tui"
 	"github.com/apocas/opencode-sandbox/internal/ui"
 )
@@ -108,6 +111,8 @@ func (x *cli) main(args []string) (int, error) {
 		return 0, nil
 	case "health":
 		return x.health()
+	case "update": // needs no engine, and may run as root where the program is root's
+		return x.update(rest)
 	}
 	if to, ok := renamed[cmd]; ok {
 		return 0, usagef("%s is now: opencode-sandbox %s (see: opencode-sandbox help)", cmd, to)
@@ -506,5 +511,113 @@ func (x *cli) health() (int, error) {
 	if !d.OK {
 		return 1, nil
 	}
+	return 0, nil
+}
+
+// update replaces this program with the latest release, or pulls the git
+// clone it runs from.
+func (x *cli) update(args []string) (int, error) {
+	check := false
+	for _, a := range args {
+		switch a {
+		case "--check":
+			check = true
+		case "-h", "--help":
+			x.help(os.Stdout, "update")
+			return 0, nil
+		default:
+			return 0, usagef("update takes only --check (got %s)", a)
+		}
+	}
+	exe, err := selfupdate.Executable()
+	if err != nil {
+		return 0, err
+	}
+	if c := selfupdate.CloneOf(exe); c != nil {
+		return x.updateClone(c, check)
+	}
+	// ctrl-c stops a download; the program in place is untouched until the end.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	u := selfupdate.New(core.Version)
+	x.rep.Step("Looking for the latest release")
+	rel, err := u.Latest(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("couldn't find the latest release: %w", err)
+	}
+	x.rep.Done()
+	switch c := selfupdate.Compare(rel.Version, core.Version); {
+	case c == 0:
+		x.done(fmt.Sprintf("opencode-sandbox %s is the latest release", core.Version))
+		return 0, nil
+	case c < 0:
+		x.done(fmt.Sprintf("opencode-sandbox %s is newer than the latest release (%s)", core.Version, rel.Version))
+		return 0, nil
+	case check:
+		fmt.Printf("opencode-sandbox %s is out (you have %s); get it with: opencode-sandbox update\n", rel.Version, core.Version)
+		return 0, nil
+	}
+	x.rep.Step("Downloading opencode-sandbox " + rel.Version)
+	if err := u.Install(ctx, rel, exe); err != nil {
+		var na *selfupdate.NoAccessError
+		if errors.As(err, &na) {
+			return 0, fmt.Errorf("can't write to %s, where this opencode-sandbox is; update it as someone who can (sudo %s update), or install a copy of your own with the install script (see %s)",
+				na.Dir, exe, strings.TrimSuffix(selfupdate.Releases, "/releases")+"#install")
+		}
+		return 0, err
+	}
+	x.rep.Done()
+	x.done(fmt.Sprintf("updated opencode-sandbox %s → %s (%s)", core.Version, rel.Version, ui.Tilde(exe)))
+	x.rep.Note("what changed: " + rel.Page())
+	x.rep.Note("your sandboxes keep the image they were created with; new ones use " + rel.Version + "'s, built the first time")
+	return 0, nil
+}
+
+// updateClone updates the git clone this program was built by.
+func (x *cli) updateClone(c *selfupdate.Clone, check bool) (int, error) {
+	where := ui.Tilde(c.Root)
+	if _, err := exec.LookPath("git"); err != nil {
+		return 0, fmt.Errorf("this opencode-sandbox runs from a git clone (%s), and updating it needs git", where)
+	}
+	branch := c.Branch()
+	if branch == "" {
+		return 0, fmt.Errorf("this opencode-sandbox runs from a git clone (%s) that's at a fixed commit, not on a branch; move it yourself, e.g.: git -C %s checkout master && git -C %s pull",
+			where, c.Root, c.Root)
+	}
+	if check {
+		x.rep.Step("Fetching " + where)
+		n, err := c.Behind()
+		if err != nil {
+			return 0, err
+		}
+		x.rep.Done()
+		if n == 0 {
+			x.done(fmt.Sprintf("the clone in %s is up to date (%s)", where, branch))
+		} else {
+			fmt.Printf("the clone in %s is %d commits behind (%s); get them with: opencode-sandbox update\n", where, n, branch)
+		}
+		return 0, nil
+	}
+	x.rep.Note(fmt.Sprintf("this opencode-sandbox runs from a git clone (%s): updating it with git pull --ff-only", where))
+	before, err := c.Head()
+	if err != nil {
+		return 0, err
+	}
+	if err := c.Pull(os.Stdin, os.Stderr); err != nil {
+		return 0, fmt.Errorf("git couldn't update the clone in %s (it says why above); nothing was changed", where)
+	}
+	if after, err := c.Head(); err != nil {
+		return 0, err
+	} else if after == before {
+		x.done(fmt.Sprintf("nothing new: still opencode-sandbox %s", core.Version))
+		return 0, nil
+	}
+	x.rep.Step("Building the new version")
+	v, err := c.Rebuild(x.rep.Log())
+	if err != nil {
+		return 0, fmt.Errorf("the clone was updated, but building it failed: %w", err)
+	}
+	x.rep.Done()
+	x.done("updated to " + v)
 	return 0, nil
 }

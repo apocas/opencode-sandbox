@@ -62,3 +62,11 @@ func TestWantsHelp(t *testing.T) {
 		t.Error("wantsHelp")
 	}
 }
+
+func TestUpdateArguments(t *testing.T) {
+	_, err := newCLI().main([]string{"update", "--force"})
+	var ue usageError
+	if !errors.As(err, &ue) || !strings.Contains(err.Error(), "update takes only --check") {
+		t.Errorf("got %v", err)
+	}
+}

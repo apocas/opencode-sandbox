@@ -75,6 +75,15 @@ build. Existing sandboxes keep the image they were created with.`},
 	{"agents", "[stop]", "show (or stop) the ssh-agents of open sandboxes", `
 Shows the ssh-agents of open sandboxes and the key each holds; "stop" stops
 them all, cutting SSH for open sandboxes.`},
+	{"update", "[--check]", "update opencode-sandbox to the latest release", `
+Updates opencode-sandbox itself: downloads the latest release's program for
+this system from GitHub, checks it against the release's SHA256SUMS and that
+it runs, and replaces the one you're running. Where opencode-sandbox runs from
+a git clone, it updates the clone with git pull --ff-only and rebuilds it.
+
+  --check      only say whether there's something newer
+
+Your sandboxes aren't touched: they keep the image they were created with.`},
 	{"help", "[COMMAND]", "show help", ""},
 	{"version", "", "show the opencode-sandbox and opencode versions", ""},
 }

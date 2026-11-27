@@ -19,6 +19,13 @@ jobs:
       - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - run: go vet ./...
       - run: go test ./...
+      # The install script, for real: the latest release, into a scratch
+      # folder (ubuntu's sh is dash, macOS's is bash).
+      - name: install.sh
+        run: |
+          if command -v shellcheck >/dev/null; then shellcheck install.sh; fi
+          OPENCODE_SANDBOX_INSTALL_DIR="$RUNNER_TEMP/bin" sh install.sh
+          "$RUNNER_TEMP/bin/opencode-sandbox" version
 
   # Every command against a real Docker (rootful, so the host ssh-agent mode
   # is used), and against sandboxes made by the bash launcher of v0.4.0; then

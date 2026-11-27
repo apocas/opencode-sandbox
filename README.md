@@ -121,24 +121,39 @@ sudo systemctl reload docker
 
 ## Install
 
-opencode-sandbox is a single program with nothing to install next to it. Pick
-one way:
+```bash
+curl -fsSL https://raw.githubusercontent.com/apocas/opencode-sandbox/master/install.sh | sh
+```
 
-**A release binary.** Download the one for your system from the
+[`install.sh`](install.sh) downloads the latest release's program for your
+system (Linux or macOS, x86_64 or arm64), checks it against the release's
+`SHA256SUMS`, and puts it in `~/.local/bin`. opencode-sandbox is a single
+program with nothing to install next to it, so that's all. Then run
+`opencode-sandbox health` to see whether sandboxes can run here.
+
+| To install | Pipe it into this instead of `sh` |
+|---|---|
+| somewhere else | `OPENCODE_SANDBOX_INSTALL_DIR=~/bin sh` |
+| for everyone, in `/usr/local/bin` | `sudo sh` |
+| a given version | `OPENCODE_SANDBOX_VERSION=0.6.1 sh` |
+
+The binaries are built by GitHub Actions from the tagged source, with a
+provenance attestation: `gh attestation verify ~/.local/bin/opencode-sandbox -R apocas/opencode-sandbox`
+shows which workflow and commit made yours.
+
+Other ways:
+
+**By hand.** Download the binary for your system from the
 [latest release](https://github.com/apocas/opencode-sandbox/releases/latest),
 check it against `SHA256SUMS`, and put it on your `PATH`:
 
 ```bash
-v=0.6.1 os=$(uname -s | tr A-Z a-z) arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+v=0.7.0 os=$(uname -s | tr A-Z a-z) arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 f=opencode-sandbox_${v}_${os}_${arch}
 curl -fLO https://github.com/apocas/opencode-sandbox/releases/download/v$v/$f
 curl -fL https://github.com/apocas/opencode-sandbox/releases/download/v$v/SHA256SUMS | grep " $f\$" | shasum -a 256 -c
 install -m 755 $f ~/.local/bin/opencode-sandbox && rm $f
 ```
-
-The binaries are built by GitHub Actions from the tagged source, with a
-provenance attestation: `gh attestation verify ~/.local/bin/opencode-sandbox -R apocas/opencode-sandbox`
-shows which workflow and commit made yours.
 
 **With Go:** `go install github.com/apocas/opencode-sandbox/cmd/opencode-sandbox@latest`
 puts it in `~/go/bin`.
@@ -162,14 +177,26 @@ Releases follow [Semantic Versioning](https://semver.org) and are tagged
 `opencode-sandbox version` shows your version and the opencode release it
 bundles.
 
-Replace the binary with the new release's, run `go install` again, or update
-your clone:
+```bash
+opencode-sandbox update            # to the latest release
+opencode-sandbox update --check    # only say whether there's something newer
+```
+
+`update` downloads the latest release's program, checks it against the
+release's `SHA256SUMS` and that it runs, and only then replaces the one you
+have. Where opencode-sandbox runs from a git clone, it runs
+`git pull --ff-only` in the clone instead and rebuilds it; changes of your own
+there are never discarded.
+
+0.6.1 and earlier have no `update`: run the [install script](#install) again
+(it replaces what's in `~/.local/bin`), run `go install` again, or update your
+clone:
 
 ```bash
 cd /path/to/opencode-sandbox           # your clone
 git checkout master && git pull        # the latest code
 # or a specific release:
-git fetch --tags && git checkout v0.6.1
+git fetch --tags && git checkout v0.7.0
 opencode-sandbox version
 ```
 
@@ -273,6 +300,7 @@ opencode-sandbox new [DIR] [-n NAME] [-k KEY] [-p PROVIDER] [-- ARGS...]
 | `health` | check that sandboxes can run here, show how they're isolated and what you could install to isolate them better |
 | `build [ARGS]` | rebuild the image (ARGS go to `docker build` or `container build`) |
 | `agents [stop]` | show (or stop) the ssh-agents of open sandboxes |
+| `update [--check]` | update opencode-sandbox to the latest release (`--check`: only say whether there is one) |
 | `help [COMMAND]` | help, or all options of a command |
 | `version` | the opencode-sandbox and opencode versions |
 
