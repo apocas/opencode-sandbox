@@ -22,7 +22,7 @@ type Platform struct {
 	// sandboxes get only a disposable key stored inside them, or none.
 	AgentOK    bool
 	NoAgentWhy string
-	// Runtime is the OCI runtime chosen with OPENCODE_SANDBOX_RUNTIME, ""
+	// Runtime is the OCI runtime new sandboxes get (see ChooseRuntime), ""
 	// for Docker's default.
 	Runtime string
 	Info    backend.Info
@@ -71,13 +71,36 @@ func ChooseEngine(want string, dockerOK, appleOK bool) (string, error) {
 // AppleWhy is why sandboxes in Apple container get no host ssh-agent.
 const AppleWhy = "Apple container runs each sandbox in a VM of its own, which can't reach an ssh-agent on this machine"
 
+// CheckRuntimes marks the runtimes whose program is gone from this machine,
+// where Docker runs on it: Docker goes on listing a runtime that was
+// uninstalled, and can't start a container with it.
+func CheckRuntimes(info backend.Info) backend.Info {
+	host := os.Getenv("DOCKER_HOST")
+	if InVM(info) || host != "" && !strings.HasPrefix(host, "unix://") {
+		return info // its programs are in a VM or on another machine
+	}
+	rts := make(map[string]backend.Runtime, len(info.Runtimes))
+	for name, rt := range info.Runtimes {
+		if filepath.IsAbs(rt.Path) {
+			_, err := os.Stat(rt.Path)
+			rt.Missing = errors.Is(err, os.ErrNotExist)
+		}
+		rts[name] = rt
+	}
+	info.Runtimes = rts
+	return info
+}
+
 // CheckRuntime explains why runtime can't be used for new sandboxes; nil if
 // it can.
 func CheckRuntime(info backend.Info, name string) error {
 	if name == "" {
 		return nil
 	}
-	if _, ok := info.Runtimes[name]; ok {
+	if rt, ok := info.Runtimes[name]; ok {
+		if rt.Missing {
+			return fmt.Errorf("%s=%s, but that runtime's program, %s, isn't on this machine any more", RuntimeEnv, name, rt.Path)
+		}
 		return nil
 	}
 	have := make([]string, 0, len(info.Runtimes))
@@ -96,27 +119,107 @@ func Decide(info backend.Info, chosen string) Platform {
 
 // DecideOn is Decide on the operating system goos.
 func DecideOn(goos string, info backend.Info, chosen string) Platform {
-	why := ""
-	secOpts := strings.Join(info.SecurityOptions, " ")
 	rt := chosen
 	if rt == "" {
 		rt = info.DefaultRuntime
 	}
-	switch v := os.Getenv("OPENCODE_SANDBOX_NO_AGENT"); {
-	case v != "" && v != "0":
-		why = "OPENCODE_SANDBOX_NO_AGENT is set"
-	case goos != "linux":
-		why = "on " + systemName(goos) + ", Docker runs containers in a VM that can't reach an ssh-agent on this machine"
-	case strings.Contains(info.OS, "Docker Desktop"):
-		why = "Docker Desktop runs containers in a VM that can't reach an ssh-agent on this machine"
-	case strings.Contains(secOpts, "rootless") || strings.Contains(secOpts, "userns"):
-		why = "with rootless Docker or userns-remap, sandboxes don't run with your uid, so an ssh-agent on this machine won't serve them"
+	why := noAgentHere(goos, info)
+	switch {
+	case why != "":
 	case Kind(info, rt) == Gvisor && !HostUDS(info.Runtimes[rt]):
 		why = fmt.Sprintf("gVisor (runtime %s) lets sandboxes connect to an ssh-agent on this machine only if Docker starts it with --host-uds=open", rt)
 	case Kind(info, rt) == Kata:
 		why = "Kata Containers runs sandboxes in VMs that can't reach an ssh-agent on this machine"
 	}
 	return Platform{AgentOK: why == "", NoAgentWhy: why, Runtime: chosen, Info: info}
+}
+
+// noAgentHere is why no runtime's sandboxes can use an ssh-agent on this
+// machine, "" if some can.
+func noAgentHere(goos string, info backend.Info) string {
+	secOpts := strings.Join(info.SecurityOptions, " ")
+	switch v := os.Getenv("OPENCODE_SANDBOX_NO_AGENT"); {
+	case v != "" && v != "0":
+		return "OPENCODE_SANDBOX_NO_AGENT is set"
+	case goos != "linux":
+		return "on " + systemName(goos) + ", Docker runs containers in a VM that can't reach an ssh-agent on this machine"
+	case strings.Contains(info.OS, "Docker Desktop"):
+		return "Docker Desktop runs containers in a VM that can't reach an ssh-agent on this machine"
+	case strings.Contains(secOpts, "rootless") || strings.Contains(secOpts, "userns"):
+		return "with rootless Docker or userns-remap, sandboxes don't run with your uid, so an ssh-agent on this machine won't serve them"
+	}
+	return ""
+}
+
+// AgentPossible is true where an ssh-agent on this machine can serve
+// sandboxes, given a runtime that lets it.
+func AgentPossible(goos string, info backend.Info) bool { return noAgentHere(goos, info) == "" }
+
+// ChooseRuntime picks the OCI runtime of new sandboxes in Docker: the one
+// asked for with RuntimeEnv; else gVisor, where Docker has it and using it
+// doesn't cost sandboxes the ssh-agent on this machine; else "", Docker's
+// default. auto is true for a gVisor that wasn't asked for.
+func ChooseRuntime(goos string, info backend.Info, want string) (name string, auto bool) {
+	def := Kind(info, info.DefaultRuntime)
+	if want != "" || def == Kata {
+		return want, false
+	}
+	// The best gVisor runtime Docker has: where an ssh-agent here can serve
+	// sandboxes, one that may connect to it; else one that may not.
+	agent := AgentPossible(goos, info)
+	uds := func(name string) bool { return HostUDS(info.Runtimes[name]) }
+	best := ""
+	for name, rt := range info.Runtimes {
+		switch {
+		case Kind(info, name) != Gvisor || rt.Missing:
+			continue
+		case best == "":
+		case uds(name) != uds(best):
+			if uds(name) != agent {
+				continue
+			}
+		case (name == info.DefaultRuntime) != (best == info.DefaultRuntime):
+			if best == info.DefaultRuntime {
+				continue
+			}
+		case name > best:
+			continue
+		}
+		best = name
+	}
+	switch {
+	case best == "" || best == info.DefaultRuntime:
+		return "", false
+	case def == "" && agent && !uds(best): // it would cost the agent
+		return "", false
+	}
+	return best, true
+}
+
+// RuntimeOf finds the engine's runtime of a kind (Gvisor, Kata) that can be
+// used, preferring the default one, then one that can reach an ssh-agent on
+// this machine; "" if it has none.
+func RuntimeOf(info backend.Info, kind string) string {
+	if Kind(info, info.DefaultRuntime) == kind {
+		return info.DefaultRuntime
+	}
+	var names []string
+	for name, rt := range info.Runtimes {
+		if Kind(info, name) == kind && !rt.Missing {
+			names = append(names, name)
+		}
+	}
+	sort.Slice(names, func(i, j int) bool {
+		a, b := HostUDS(info.Runtimes[names[i]]), HostUDS(info.Runtimes[names[j]])
+		if a != b {
+			return a
+		}
+		return names[i] < names[j]
+	})
+	if len(names) == 0 {
+		return ""
+	}
+	return names[0]
 }
 
 // Kinds of OCI runtime that change how sandboxes are isolated.

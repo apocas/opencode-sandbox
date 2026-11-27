@@ -62,8 +62,9 @@ func TestStatus(t *testing.T) {
 	now := time.Now()
 	started := now.Add(-5 * time.Minute)
 	var c container
-	if got := status(c, now); got != "Created" {
-		t.Errorf("never started: got %q", got)
+	c.Status.State = "stopped"
+	if got := status(c, now); got != "Exited" {
+		t.Errorf("no start on record (never started, or the service restarted since): got %q", got)
 	}
 	c.Status.StartedDate = &started
 	c.Status.State = "stopped"

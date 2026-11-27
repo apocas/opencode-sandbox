@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -23,6 +22,7 @@ import (
 type Facts struct {
 	Version string // opencode-sandbox's
 	GOOS    string
+	Machine string // GOARCH: "amd64", "arm64"…
 	System  string // "macOS 27.2.1", "Ubuntu 24.04.1 LTS"…
 	Arch    string // "Apple silicon", "Intel", "x86_64", "arm64"…
 	// MacOS is the major macOS version (0 elsewhere or if unknown);
@@ -41,15 +41,21 @@ type Facts struct {
 	AppleRunning bool
 
 	// Engine is where new sandboxes go: "docker", "apple", or "" if
-	// nowhere (EngineErr says why).
+	// nowhere (EngineErr says why). EngineEnv is what
+	// OPENCODE_SANDBOX_ENGINE asks for.
 	Engine    string
 	EngineErr string
+	EngineEnv string
 	// Agent is how new sandboxes get SSH keys.
 	Agent platform.Platform
-	// Runtime is the OCI runtime chosen with OPENCODE_SANDBOX_RUNTIME ("" for
-	// Docker's default); RuntimeErr says why it can't be used.
-	Runtime    string
-	RuntimeErr string
+	// Runtime is the OCI runtime of new sandboxes in Docker ("" for Docker's
+	// default): the one OPENCODE_SANDBOX_RUNTIME asks for (RuntimeEnv), or
+	// gVisor, used because Docker has it (RuntimeAuto). RuntimeErr says why
+	// the one asked for can't be used.
+	Runtime     string
+	RuntimeAuto bool
+	RuntimeEnv  string
+	RuntimeErr  string
 	// ImageOK: the new sandboxes' engine has the image.
 	Image   string
 	ImageOK bool
@@ -61,7 +67,8 @@ type Facts struct {
 	MissingSSH []string // OpenSSH tools not on PATH
 	PidsLimit  int
 
-	RunscOnPath bool // gVisor's runsc is installed (Linux)
+	RunscPath string // where gVisor's runsc is installed, if it is (Linux)
+	Systemd   bool   // Docker is a systemd service here (Linux)
 }
 
 // appleOK: new sandboxes can go to Apple container.
@@ -70,7 +77,7 @@ func (f Facts) appleOK() bool { return f.AppleRunning && f.AppleSilicon && f.Mac
 // Gather finds out the facts on this machine, with the docker and apple
 // engines. It only reads: nothing is built, started or changed.
 func Gather(r run.Runner, docker, apple backend.Engine, version, image string) Facts {
-	f := Facts{Version: version, GOOS: runtime.GOOS, Root: os.Getuid() == 0, Home: state.Home(), Image: image}
+	f := Facts{Version: version, GOOS: runtime.GOOS, Machine: runtime.GOARCH, Root: os.Getuid() == 0, Home: state.Home(), Image: image}
 	f.System, f.Arch = platform.SystemName(), goarch(runtime.GOARCH)
 	switch f.GOOS {
 	case "darwin":
@@ -95,28 +102,35 @@ func Gather(r run.Runner, docker, apple backend.Engine, version, image string) F
 		if name := osRelease("/etc/os-release"); name != "" {
 			f.System = name
 		}
-		_, err := exec.LookPath("runsc")
-		f.RunscOnPath = err == nil
+		// Also where setup puts it, which root's PATH may lack.
+		if p, err := exec.LookPath("runsc"); err == nil {
+			f.RunscPath = p
+		} else if fi, err := os.Stat("/usr/local/bin/runsc"); err == nil && fi.Mode().IsRegular() {
+			f.RunscPath = "/usr/local/bin/runsc"
+		}
+		f.Systemd = run.Quiet(r, "systemctl", "is-active", "--quiet", "docker") == 0
 	}
 
 	if _, err := exec.LookPath("docker"); err == nil {
 		f.DockerCLI = true
 		if info, err := docker.Info(); err == nil {
+			info = platform.CheckRuntimes(info)
 			f.Docker = &info
 			f.InVM = platform.InVM(info)
 		}
 	}
 
-	name, err := platform.ChooseEngine(os.Getenv(platform.EngineEnv), f.Docker != nil, f.appleOK())
+	f.EngineEnv, f.RuntimeEnv = os.Getenv(platform.EngineEnv), os.Getenv(platform.RuntimeEnv)
+	name, err := platform.ChooseEngine(f.EngineEnv, f.Docker != nil, f.appleOK())
 	if err != nil {
 		f.EngineErr = err.Error()
 	}
 	f.Engine = name
-	rt := os.Getenv(platform.RuntimeEnv)
+	rt := f.RuntimeEnv
 	switch name {
 	case "docker":
-		f.Runtime = rt
-		if err := platform.CheckRuntime(*f.Docker, rt); err != nil {
+		f.Runtime, f.RuntimeAuto = platform.ChooseRuntime(f.GOOS, *f.Docker, rt)
+		if err := platform.CheckRuntime(*f.Docker, f.Runtime); err != nil {
 			f.RuntimeErr, f.Runtime = err.Error(), ""
 		}
 		f.Agent = platform.Decide(*f.Docker, f.Runtime)
@@ -209,33 +223,12 @@ func readable(p string) bool {
 	return true
 }
 
-// runtimeOf finds the engine's runtime of a kind (platform.Gvisor,
-// platform.Kata), preferring the default one, then one that can reach an
-// ssh-agent on this machine.
+// runtimeOf is platform.RuntimeOf where Docker may be out of reach.
 func runtimeOf(info *backend.Info, kind string) string {
 	if info == nil {
 		return ""
 	}
-	if platform.Kind(*info, info.DefaultRuntime) == kind {
-		return info.DefaultRuntime
-	}
-	var names []string
-	for name := range info.Runtimes {
-		if platform.Kind(*info, name) == kind {
-			names = append(names, name)
-		}
-	}
-	sort.Slice(names, func(i, j int) bool {
-		a, b := platform.HostUDS(info.Runtimes[names[i]]), platform.HostUDS(info.Runtimes[names[j]])
-		if a != b {
-			return a
-		}
-		return names[i] < names[j]
-	})
-	if len(names) == 0 {
-		return ""
-	}
-	return names[0]
+	return platform.RuntimeOf(*info, kind)
 }
 
 // used is the runtime new sandboxes run in.

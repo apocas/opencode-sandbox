@@ -211,9 +211,11 @@ func status(c container, now time.Time) string {
 		return "Up " + HumanDuration(now.Sub(*c.Status.StartedDate))
 	case c.Status.State == "running":
 		return "Up"
-	case c.Status.StartedDate == nil:
-		return "Created"
 	}
+	// Apple container forgets when a container was started once its service
+	// restarts (or the Mac does), so one that was never started can't be told
+	// from one that was stopped. opencode-sandbox starts every sandbox it
+	// creates: it was stopped.
 	return "Exited"
 }
 

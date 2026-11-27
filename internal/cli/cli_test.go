@@ -63,6 +63,14 @@ func TestWantsHelp(t *testing.T) {
 	}
 }
 
+func TestSetupArguments(t *testing.T) {
+	_, err := newCLI().main([]string{"setup", "--now"})
+	var ue usageError
+	if !errors.As(err, &ue) || !strings.Contains(err.Error(), "setup takes only -y") {
+		t.Errorf("got %v", err)
+	}
+}
+
 func TestUpdateArguments(t *testing.T) {
 	_, err := newCLI().main([]string{"update", "--force"})
 	var ue usageError

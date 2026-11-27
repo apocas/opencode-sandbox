@@ -68,6 +68,9 @@ func (m *model) header() string {
 	var es []string
 	for _, e := range m.c.Engines() {
 		s := e.Name + " " + e.Version
+		if e.With != "" {
+			s += " with " + e.With
+		}
 		if e.New {
 			s = t.Accented.Render("new → ") + s
 		}

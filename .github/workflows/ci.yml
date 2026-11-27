@@ -29,13 +29,22 @@ jobs:
 
   # Every command against a real Docker (rootful, so the host ssh-agent mode
   # is used), and against sandboxes made by the bash launcher of v0.4.0; then
-  # on gVisor, without host sockets (disposable keys inside) and with them
-  # (host ssh-agent).
+  # after `opencode-sandbox setup` has installed gVisor: on the runtime new
+  # sandboxes get by themselves (host ssh-agent), and on the one without host
+  # sockets, asked for (disposable keys inside).
   integration:
     strategy:
       fail-fast: false
       matrix:
-        runtime: ["", runsc, runsc-ssh]
+        include:
+          - name: docker
+          - name: gvisor
+            setup: true
+            expect: runsc-ssh
+          - name: gvisor, no host sockets
+            setup: true
+            runtime: runsc
+    name: integration (${{ matrix.name }})
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,22 +53,17 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Install gVisor
-        if: matrix.runtime != ''
-        run: |
-          url=https://storage.googleapis.com/gvisor/releases/release/latest/$(uname -m)
-          curl -fsSL -o gvisor.tar.bz2 "$url/gvisor.tar.bz2"
-          curl -fsSL -o gvisor.tar.bz2.sha512 "$url/gvisor.tar.bz2.sha512"
-          sha512sum -c gvisor.tar.bz2.sha512
-          mkdir gvisor && tar -C gvisor -xjf gvisor.tar.bz2
-          sudo install -m 755 gvisor/runsc gvisor/containerd-shim-runsc-v1 /usr/local/bin/
-          sudo cp -r gvisor/gvisor-bin /usr/local/bin/
-          sudo /usr/local/bin/runsc install
-          sudo /usr/local/bin/runsc install --runtime runsc-ssh -- --host-uds=open
-          sudo systemctl restart docker
-          docker info --format '{{json .Runtimes}}'
       - run: go build -o .bin/opencode-sandbox ./cmd/opencode-sandbox
+      - name: opencode-sandbox setup
+        if: matrix.setup
+        run: |
+          .bin/opencode-sandbox health | grep -A3 '^Next step'
+          .bin/opencode-sandbox setup -y
+          docker info --format '{{json .Runtimes}}'
+          .bin/opencode-sandbox setup | grep 'nothing to set up'
+          .bin/opencode-sandbox health | grep 'boundary   gVisor (runtime runsc-ssh, used because Docker has it)'
       - run: git worktree add /tmp/v040 v0.4.0
-      - run: test/integration.sh .bin/opencode-sandbox ${{ matrix.runtime == '' && '/tmp/v040/opencode-sandbox' || '' }}
+      - run: test/integration.sh .bin/opencode-sandbox ${{ matrix.name == 'docker' && '/tmp/v040/opencode-sandbox' || '' }}
         env:
           OPENCODE_SANDBOX_RUNTIME: ${{ matrix.runtime }}
+          EXPECT_RUNTIME: ${{ matrix.expect }}

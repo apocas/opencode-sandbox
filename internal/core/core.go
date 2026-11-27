@@ -30,7 +30,7 @@ import (
 
 // Version is this release; images are tagged with it, so after an update the
 // next run builds the matching image by itself.
-const Version = "0.7.0"
+const Version = "0.8.0"
 
 // pidsLimit is the most processes a sandbox may run.
 const pidsLimit = 1024
@@ -103,7 +103,7 @@ func (a *Core) note(format string, args ...any) { a.Rep.Note(fmt.Sprintf(format,
 func (a *Core) findEngines() {
 	a.engines = nil
 	if info, err := a.docker.Info(); err == nil {
-		a.dockerInfo = info
+		a.dockerInfo = platform.CheckRuntimes(info)
 		a.engines = append(a.engines, a.docker)
 	}
 	if apple.Available(a.r) {
@@ -133,7 +133,8 @@ func (a *Core) Setup() error {
 	a.newE = a.engine(name)
 	switch name {
 	case "docker":
-		a.plat = platform.Decide(a.dockerInfo, os.Getenv(platform.RuntimeEnv))
+		rt, _ := platform.ChooseRuntime(runtime.GOOS, a.dockerInfo, os.Getenv(platform.RuntimeEnv))
+		a.plat = platform.Decide(a.dockerInfo, rt)
 		if err := platform.CheckRuntime(a.dockerInfo, a.plat.Runtime); err != nil {
 			a.newE, a.newErr = nil, err
 		}
@@ -151,6 +152,9 @@ type Engine struct {
 	Name    string // "Docker" or "Apple container"
 	Version string
 	New     bool // new sandboxes go here
+	// With is what new sandboxes run on in it, where that's more than the
+	// engine itself: "gVisor" or "Kata".
+	With string
 }
 
 // Engines lists the running engines.
@@ -163,7 +167,11 @@ func (a *Core) Engines() []Engine {
 			name = "Apple container"
 			info, _ = e.Info()
 		}
-		es = append(es, Engine{Name: name, Version: info.Version, New: e == a.newE})
+		with := ""
+		if e == a.newE && e.Name() == "docker" {
+			with = map[string]string{platform.Gvisor: "gVisor", platform.Kata: "Kata"}[platform.Kind(a.dockerInfo, a.runtime())]
+		}
+		es = append(es, Engine{Name: name, Version: info.Version, New: e == a.newE, With: with})
 	}
 	return es
 }

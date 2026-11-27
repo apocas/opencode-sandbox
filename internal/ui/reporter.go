@@ -24,6 +24,7 @@ type Reporter struct {
 
 	mu      sync.Mutex
 	step    string
+	detail  string
 	started time.Time
 	stop    chan struct{}
 	stopped chan struct{}
@@ -41,7 +42,7 @@ func (r *Reporter) Step(title string) {
 	r.finish(true)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.step, r.started = title, time.Now()
+	r.step, r.detail, r.started = title, "", time.Now()
 	r.log.reset()
 	if !r.tty {
 		fmt.Fprintf(r.w, "opencode-sandbox: %s…\n", title)
@@ -62,8 +63,11 @@ func (r *Reporter) spin(stop, stopped chan struct{}) {
 	for i := 0; ; i++ {
 		r.mu.Lock()
 		el := ""
+		if r.detail != "" {
+			el = r.t.Dim.Render(" " + r.detail)
+		}
 		if d := time.Since(r.started); d >= 3*time.Second {
-			el = r.t.Dim.Render(fmt.Sprintf(" %s", d.Round(time.Second)))
+			el += r.t.Dim.Render(fmt.Sprintf(" %s", d.Round(time.Second)))
 		}
 		lipgloss.Fprint(r.w, "\r\x1b[K"+r.t.Accented.Render(frames[i%len(frames)])+" "+r.step+"…"+el)
 		r.mu.Unlock()
@@ -101,6 +105,14 @@ func (r *Reporter) finish(ok bool) {
 }
 
 func (r *Reporter) Done() { r.finish(true) }
+
+// Detail shows text after the current step's title while it spins: how far
+// a download is, say.
+func (r *Reporter) Detail(text string) {
+	r.mu.Lock()
+	r.detail = text
+	r.mu.Unlock()
+}
 
 // Fail ends the current step with ✗ and shows the end of its output.
 func (r *Reporter) Fail() {

@@ -44,7 +44,12 @@ func Build(f Facts) Doc {
 	case "apple":
 		appleIsolation(p, f)
 	}
-	options(p, f)
+	plan := PlanFor(f)
+	options(p, f, plan)
+	if len(plan.Steps) > 0 {
+		p.section("Next step")
+		p.item("run", cmd("opencode-sandbox setup")+" sets up "+plan.What+": "+plan.Gain+". It shows what it will do and asks before doing it.")
+	}
 	p.doc.OK = ok
 	return *p.doc
 }
@@ -198,23 +203,30 @@ func boundary(f Facts) string {
 
 // whyRuntime says how the runtime in use was chosen.
 func whyRuntime(f Facts) string {
-	if f.Runtime != "" {
+	switch {
+	case f.RuntimeAuto:
+		return "runtime " + f.Runtime + ", used because Docker has it"
+	case f.Runtime != "":
 		return "runtime " + f.Runtime + ", chosen with " + platform.RuntimeEnv
 	}
 	return "runtime " + f.Docker.DefaultRuntime + ", Docker's default"
 }
 
 // options lists the kernel boundaries this machine has or could have, the
-// one in use first.
-func options(p *printer, f Facts) {
+// one in use first. Where plan has steps, `opencode-sandbox setup` does what
+// an option needs.
+func options(p *printer, f Facts, plan Plan) {
 	p.section("Isolation options here")
 	if f.Docker != nil {
 		used, how := "used", ""
 		if f.Engine != "docker" || platform.Kind(*f.Docker, f.used()) != "" {
 			used = "available"
 		}
-		if f.Engine != "docker" {
+		switch {
+		case f.Engine != "docker":
 			how = "; set " + platform.EngineEnv + "=docker to use it"
+		case f.RuntimeAuto:
+			how = "; set " + platform.RuntimeEnv + "=" + f.Docker.DefaultRuntime + " to use it"
 		}
 		switch {
 		case f.InVM:
@@ -227,7 +239,7 @@ func options(p *printer, f Facts) {
 	case "darwin":
 		appleContainer(p, f)
 	case "linux":
-		gvisor(p, f)
+		gvisor(p, f, plan)
 		if f.Docker != nil && platform.Kind(*f.Docker, f.used()) == platform.Kata {
 			p.item("used", "Kata Containers ("+whyRuntime(f)+"): a VM for each sandbox")
 		} else if rt := runtimeOf(f.Docker, platform.Kata); rt != "" {
@@ -239,6 +251,9 @@ func options(p *printer, f Facts) {
 	}
 }
 
+// setupCmd is the command that does what an option needs.
+var setupCmd = cmd("opencode-sandbox setup")
+
 func appleContainer(p *printer, f Facts) {
 	what := "Apple container: one lightweight VM for each sandbox, so sandboxes don't share a kernel with each other or with your other containers."
 	switch {
@@ -247,9 +262,9 @@ func appleContainer(p *printer, f Facts) {
 	case f.MacOS > 0 && f.MacOS < 26:
 		p.item("no", fmt.Sprintf("Apple container needs macOS 26 or later (this is %s)", f.System))
 	case !f.AppleCLI:
-		p.item("install", what+" Get it from https://github.com/apple/container/releases and run "+cmd("container system start")+"; new sandboxes then use it.")
+		p.item("install", what+" "+setupCmd+" installs it (from https://github.com/apple/container/releases); new sandboxes then use it.")
 	case !f.AppleRunning:
-		p.item("start", what+" "+f.AppleVersion+" is installed; run "+cmd("container system start")+", and new sandboxes use it.")
+		p.item("start", what+" "+f.AppleVersion+" is installed; "+setupCmd+" (or "+cmd("container system start")+") starts it, and new sandboxes use it.")
 	case f.Engine == "apple":
 		p.item("used", "Apple container "+f.AppleVersion+": a lightweight VM for each sandbox")
 	default:
@@ -257,27 +272,44 @@ func appleContainer(p *printer, f Facts) {
 	}
 }
 
-func gvisor(p *printer, f Facts) {
+func gvisor(p *printer, f Facts, plan Plan) {
 	what := "gVisor: each sandbox runs on its own user-space kernel, so a kernel bug is much harder to reach from inside it."
-	setup := "run " + cmd("sudo runsc install") + " and " + cmd("sudo systemctl reload docker") + "."
+	const byHand = "https://gvisor.dev/docs/user_guide/install/"
+	auto := len(plan.Steps) > 0
 	// Without --host-uds=open, a host ssh-agent can't serve gVisor sandboxes.
-	uds := func(rt string) string {
-		if p := platform.DecideOn(f.GOOS, *f.Docker, rt); p.AgentOK || !strings.HasPrefix(p.NoAgentWhy, "gVisor") {
-			return ""
-		}
-		return " Its sandboxes get SSH keys only stored inside them; for keys from ~/.ssh, add a runtime that may reach the host's ssh-agent with " + cmd("sudo runsc install --runtime runsc-ssh -- --host-uds=open") + " and use that one."
+	inside := func(rt string) bool {
+		d := platform.DecideOn(f.GOOS, *f.Docker, rt)
+		return !d.AgentOK && strings.HasPrefix(d.NoAgentWhy, "gVisor")
 	}
 	switch rt := runtimeOf(f.Docker, platform.Gvisor); {
 	case f.Docker != nil && platform.Kind(*f.Docker, f.used()) == platform.Gvisor:
-		p.item("used", "gVisor ("+whyRuntime(f)+"): each sandbox runs on its own user-space kernel."+uds(f.used()))
+		text := "gVisor (" + whyRuntime(f) + "): each sandbox runs on its own user-space kernel."
+		switch {
+		case !inside(f.used()):
+		case auto:
+			text += " Its sandboxes get SSH keys only stored inside them; " + setupCmd + " adds a runtime that may reach the host's ssh-agent, for keys from ~/.ssh."
+		default:
+			text += " Its sandboxes get SSH keys only stored inside them; unset " + platform.RuntimeEnv + " for a runtime that may reach the host's ssh-agent, for keys from ~/.ssh."
+		}
+		p.item("used", text)
+	case rt != "" && auto:
+		p.item("set up", what+" Docker has it as runtime "+rt+", which can't reach the host's ssh-agent: its sandboxes couldn't use keys from ~/.ssh, so it isn't used unless you ask. "+
+			setupCmd+" adds a runtime that can, and new sandboxes then use it. To use "+rt+" as it is, set "+platform.RuntimeEnv+"="+rt+".")
 	case rt != "":
-		p.item("available", what+" Docker has it as runtime "+rt+"; set "+platform.RuntimeEnv+"="+rt+" to use it."+uds(rt))
+		p.item("available", what+" Docker has it as runtime "+rt+"; unset "+platform.RuntimeEnv+" to use it.")
 	case f.InVM:
 		p.item("no", "gVisor needs Docker Engine; Docker Desktop's VM doesn't have it")
-	case f.RunscOnPath:
-		p.item("set up", what+" runsc is installed but Docker doesn't know it: "+setup+" Then set "+platform.RuntimeEnv+"=runsc to use it.")
+	case f.Docker == nil:
+		p.item("install", what+" Once Docker works, "+setupCmd+" installs it.")
+	case platform.Kind(*f.Docker, f.used()) == platform.Kata: // a VM each: gVisor would add nothing
+	case userns(f) == ", rootless":
+		p.item("install", what+" With rootless Docker, it isn't set up for you: "+byHand)
+	case !auto:
+		p.item("no", "gVisor has no build for "+f.Arch)
+	case f.RunscPath != "":
+		p.item("set up", what+" runsc is installed but Docker doesn't know it: "+setupCmd+" registers it (by hand: "+byHand+"), and new sandboxes then use it.")
 	default:
-		p.item("install", what+" Get it from https://gvisor.dev/docs/user_guide/install/, then "+setup+" Then set "+platform.RuntimeEnv+"=runsc to use it.")
+		p.item("install", what+" "+setupCmd+" installs it (by hand: "+byHand+"), and new sandboxes then use it.")
 	}
 }
 

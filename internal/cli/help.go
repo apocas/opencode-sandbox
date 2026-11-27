@@ -69,6 +69,24 @@ sandbox after asking (-y: without asking).`},
 	{"health", "", "check that sandboxes can run here and how they're isolated", `
 Checks that sandboxes can run here, shows how a new one is isolated, and what
 you could install to isolate sandboxes better. Exits 1 if they can't run.`},
+	{"setup", "[-y]", "install the strongest isolation this machine can have", `
+Sets this machine up so that new sandboxes are isolated as strongly as it
+allows. It shows what it will do, command by command, and asks first:
+
+  on a Mac     installs and starts Apple container (macOS 26 or later on
+               Apple silicon): a lightweight VM for each sandbox
+  on Linux     installs gVisor and registers it with Docker: a user-space
+               kernel for each sandbox, with a runtime that may connect to
+               the ssh-agent socket a sandbox is given
+
+What it downloads comes from Apple's and gVisor's own releases and is checked
+before use: Apple's signature on its installer, gVisor's published SHA-512.
+The steps that need root run with sudo. Sandboxes you already have aren't
+changed; new ones use what was set up by themselves. Where there's nothing
+stronger to install, it says so. "opencode-sandbox health" shows what a new
+sandbox gets now.
+
+  -y           go ahead without asking`},
 	{"build", "[ARGS]", "rebuild the image for new sandboxes", `
 Rebuilds the image new sandboxes use; ARGS go to docker build or container
 build. Existing sandboxes keep the image they were created with.`},
@@ -129,8 +147,9 @@ the dashboard: your sandboxes, and keys to create, open, copy and delete them.
   OPENCODE_SANDBOX_ENGINE      docker or apple: where new sandboxes go
                                (default: Apple container where it runs; else
                                Docker)
-  OPENCODE_SANDBOX_RUNTIME     a Docker runtime for new sandboxes, e.g. runsc
-                               for gVisor (see: opencode-sandbox health)
+  OPENCODE_SANDBOX_RUNTIME     a Docker runtime for new sandboxes, e.g. runc
+                               (default: gVisor where Docker has it; else
+                               Docker's own default)
   OPENCODE_SANDBOX_NO_AGENT    1: keep keys inside sandboxes even where a host
                                ssh-agent would work
   OPENCODE_SANDBOX_SEED_HOSTS  hosts whose keys are copied from your

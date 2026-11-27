@@ -6,7 +6,9 @@
 # folder. It touches no other sandbox: where you have some, the steps that
 # act on "all" or "the first" sandbox are skipped.
 #
-# Usage: test/integration.sh BINARY [BASH_LAUNCHER]
+# Usage: [EXPECT_RUNTIME=NAME] test/integration.sh BINARY [BASH_LAUNCHER]
+#   EXPECT_RUNTIME the Docker runtime new sandboxes must get without being
+#                  asked for one (runsc-ssh after `opencode-sandbox setup`)
 #   BINARY         the opencode-sandbox binary to test
 #   BASH_LAUNCHER  optional: the bash launcher of v0.4.0 (opencode-sandbox
 #                  script in a checkout of that tag), to test that sandboxes
@@ -122,6 +124,12 @@ if [[ "$ENGINE" == apple ]]; then
 else
   DOCKER_HOST=unix:///nonexistent.sock refuse "health without Docker" "can't reach Docker" "$BIN" health
 fi
+# setup only shows what it would do, and asks first: nothing changes here.
+if "$BIN" health 2>/dev/null | grep -q '^Next step'; then
+  refuse "setup shows its plan and asks first" 'add -y to go ahead' "$BIN" setup
+else
+  check "setup has nothing to install" 'nothing to set up|unset it|the most|needs|rootless|no build' "$BIN" setup
+fi
 
 echo "== create"
 cd "$T/ws"
@@ -129,11 +137,13 @@ check "create with a disposable key" 'opencode v?[0-9]' "$BIN" new -n it-a -k ne
 [[ -f "$DATA/keys/it-a/id_ed25519" ]] && ok "disposable key in the data folder" || bad "disposable key in the data folder"
 check "create with no key" 'opencode v?[0-9]' "$BIN" new . -n it-b -k none -- --version
 check "ls" 'it-a +closed.*disposable' "$BIN" ls
-runs_in=docker; [[ "${OPENCODE_SANDBOX_RUNTIME:-}" == *runsc* ]] && runs_in=gvisor; [[ "$ENGINE" == apple ]] && runs_in=apple
+# health says what new sandboxes run in: gVisor is used where Docker has it.
+runs_in=docker; "$BIN" health 2>/dev/null | grep -q '^  boundary   gVisor' && runs_in=gvisor; [[ "$ENGINE" == apple ]] && runs_in=apple
 check "ls shows what it runs in" "it-a .* $runs_in " "$BIN" ls
-if [[ -n "${OPENCODE_SANDBOX_RUNTIME:-}" ]]; then
-  [[ "$(docker inspect -f '{{.HostConfig.Runtime}}' opencode-sandbox-it-a)" == "$OPENCODE_SANDBOX_RUNTIME" ]] \
-    && ok "created with runtime $OPENCODE_SANDBOX_RUNTIME" || bad "created with runtime $OPENCODE_SANDBOX_RUNTIME"
+want_rt="${EXPECT_RUNTIME:-${OPENCODE_SANDBOX_RUNTIME:-}}"
+if [[ -n "$want_rt" ]]; then
+  [[ "$(docker inspect -f '{{.HostConfig.Runtime}}' opencode-sandbox-it-a)" == "$want_rt" ]] \
+    && ok "created with runtime $want_rt" || bad "created with runtime $want_rt"
 fi
 check "key" "$(cut -d' ' -f2 "$DATA/keys/it-a/id_ed25519.pub" | sed 's/[+/]/./g')" "$BIN" key it-a
 refuse "key of a keyless sandbox" 'has no SSH key' "$BIN" key it-b

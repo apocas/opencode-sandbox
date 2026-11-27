@@ -20,6 +20,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/apocas/opencode-sandbox/internal/dl"
 )
 
 // Releases is where opencode-sandbox's releases are published.
@@ -191,31 +193,8 @@ func runs(ctx context.Context, path, version string) error {
 
 // open starts a download; the caller closes it.
 func (u *Updater) open(ctx context.Context, url string) (io.ReadCloser, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", u.Agent)
-	c := *u.Client
-	secure := strings.HasPrefix(u.Base, "https://")
-	c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		switch {
-		case len(via) >= 10:
-			return errors.New("too many redirects")
-		case secure && req.URL.Scheme != "https":
-			return fmt.Errorf("refusing a redirect to %s://%s, which isn't https", req.URL.Scheme, req.URL.Host)
-		}
-		return nil
-	}
-	resp, err := c.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, fmt.Errorf("%s: %s", url, resp.Status)
-	}
-	return resp.Body, nil
+	body, _, err := dl.Open(ctx, u.Client, url, u.Agent)
+	return body, err
 }
 
 // Compare orders two versions (X.Y.Z, a leading "v" and anything after "-" or

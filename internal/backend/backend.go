@@ -122,4 +122,7 @@ type Info struct {
 type Runtime struct {
 	Path string
 	Args []string
+	// Missing: the engine lists it, but its program isn't on this machine
+	// (see platform.CheckRuntimes); it can't start a container.
+	Missing bool
 }

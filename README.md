@@ -64,8 +64,10 @@ runc and gVisor.
 ## Isolation
 
 What separates a sandbox from your machine depends on what runs it.
-`opencode-sandbox health` (or `h` in the dashboard) shows it for this machine, which stronger options
-it has, and what you could install for them.
+`opencode-sandbox health` (or `h` in the dashboard) shows it for this machine
+and which stronger options it has; `opencode-sandbox setup` installs the
+strongest one. New sandboxes always get the strongest that's there: Apple
+container, else Docker with gVisor, else Docker.
 
 | Runs in | Boundary around a sandbox |
 |---|---|
@@ -76,11 +78,14 @@ it has, and what you could install for them.
 
 ### Apple container (macOS)
 
-On a Mac with Apple silicon and macOS 26 or later, install
-[Apple's container](https://github.com/apple/container/releases) and run
-`container system start`. New sandboxes then go there by themselves; ones made
-with Docker stay in Docker, and `ls` shows where each runs (RUNS IN). Set
-`OPENCODE_SANDBOX_ENGINE=docker` to keep using Docker for new ones.
+On a Mac with Apple silicon and macOS 26 or later, `opencode-sandbox setup`
+downloads the installer of
+[Apple's container](https://github.com/apple/container/releases), checks that
+Apple signed it, runs it (`sudo installer`) and starts the service. By hand:
+install it from that page and run `container system start`. New sandboxes then
+go there by themselves; ones made with Docker stay in Docker, and `ls` shows
+where each runs (RUNS IN). Set `OPENCODE_SANDBOX_ENGINE=docker` to keep using
+Docker for new ones.
 
 What's different there:
 
@@ -95,22 +100,40 @@ What's different there:
 
 ### gVisor (Linux)
 
-[Install gVisor](https://gvisor.dev/docs/user_guide/install/), register it
-with Docker (`sudo runsc install`, then `sudo systemctl reload docker`) and set
-`OPENCODE_SANDBOX_RUNTIME=runsc`. For keys from `~/.ssh` (a host ssh-agent),
-gVisor must be allowed to connect to the agent socket mounted into the
-sandbox. Register a second runtime for that, so other containers keep the
-stricter default, and use it with `OPENCODE_SANDBOX_RUNTIME=runsc-ssh`:
+With Docker Engine, `opencode-sandbox setup` downloads
+[gVisor](https://gvisor.dev)'s latest release, checks it against its published
+SHA-512, installs it in `/usr/local/bin` and registers it with Docker. It runs
+these for you, with `sudo`:
 
 ```bash
-sudo runsc install --runtime runsc-ssh -- --host-uds=open
-sudo systemctl reload docker
+sudo runsc install                                          # runtime runsc
+sudo runsc install --runtime runsc-ssh -- --host-uds=open   # runtime runsc-ssh
+sudo systemctl reload docker                                # running containers carry on
 ```
+
+`runsc-ssh` may connect to the ssh-agent socket mounted into a sandbox, which
+keys from `~/.ssh` need; it's a second runtime so that anything else you run
+on `runsc` keeps the stricter setting. To do it by hand,
+[install gVisor](https://gvisor.dev/docs/user_guide/install/) and run the
+same three commands.
+
+New sandboxes then run on gVisor by themselves; your other containers and the
+sandboxes you already have don't change. Which runtime they get:
+
+- `runsc-ssh` (one with `--host-uds=open`) where an ssh-agent on this machine
+  can serve sandboxes.
+- A gVisor runtime without it only where there's no such agent anyway
+  (rootless Docker, userns-remap, Docker in a VM). Elsewhere it would cost
+  sandboxes the keys from `~/.ssh`, so it's used only if you ask.
+- `OPENCODE_SANDBOX_RUNTIME=NAME` asks for one: `runc` for plain Docker.
+
+With rootless Docker, `setup` leaves gVisor to you.
 
 ## Requirements
 
 - Docker, used as a regular user (not root); or on a Mac with Apple silicon and
-  macOS 26 or later, Apple's `container` instead (see [Isolation](#isolation)).
+  macOS 26 or later, Apple's `container` instead, which `opencode-sandbox setup`
+  installs (see [Isolation](#isolation)).
 - The OpenSSH client tools (`ssh-agent`, `ssh-add`, `ssh-keygen`), which Linux
   distributions and macOS include.
 - Linux or macOS, on x86_64 or arm64. To install from a git clone or with
@@ -128,8 +151,16 @@ curl -fsSL https://raw.githubusercontent.com/apocas/opencode-sandbox/master/inst
 [`install.sh`](install.sh) downloads the latest release's program for your
 system (Linux or macOS, x86_64 or arm64), checks it against the release's
 `SHA256SUMS`, and puts it in `~/.local/bin`. opencode-sandbox is a single
-program with nothing to install next to it, so that's all. Then run
-`opencode-sandbox health` to see whether sandboxes can run here.
+program with nothing to install next to it, so that's all. Then:
+
+```bash
+opencode-sandbox health   # can sandboxes run here, and what isolates them?
+opencode-sandbox setup    # install the strongest isolation this machine can have
+```
+
+`setup` installs Apple container on a Mac and gVisor on Linux (see
+[Isolation](#isolation)). It shows every step and command first, and asks
+before doing anything.
 
 | To install | Pipe it into this instead of `sh` |
 |---|---|
@@ -148,7 +179,7 @@ Other ways:
 check it against `SHA256SUMS`, and put it on your `PATH`:
 
 ```bash
-v=0.7.0 os=$(uname -s | tr A-Z a-z) arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+v=0.8.0 os=$(uname -s | tr A-Z a-z) arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 f=opencode-sandbox_${v}_${os}_${arch}
 curl -fLO https://github.com/apocas/opencode-sandbox/releases/download/v$v/$f
 curl -fL https://github.com/apocas/opencode-sandbox/releases/download/v$v/SHA256SUMS | grep " $f\$" | shasum -a 256 -c
@@ -196,12 +227,16 @@ clone:
 cd /path/to/opencode-sandbox           # your clone
 git checkout master && git pull        # the latest code
 # or a specific release:
-git fetch --tags && git checkout v0.7.0
+git fetch --tags && git checkout v0.8.0
 opencode-sandbox version
 ```
 
 - The next run builds the image for the new version by itself (or run
   `opencode-sandbox build`).
+- **Coming from 0.7 or earlier:** where Docker has a gVisor runtime that
+  doesn't cost sandboxes your ssh-agent, new sandboxes now run on it by
+  themselves; `OPENCODE_SANDBOX_RUNTIME=runc` keeps them on plain Docker
+  (see [gVisor](#gvisor-linux)).
 - **Coming from 0.5 or earlier:** the commands are now subcommands, and
   `opencode-sandbox` on its own opens the dashboard instead of creating a
   sandbox: `--list` is now `ls`, `--resume` is `open`, `--pubkey` is `key`,
@@ -298,6 +333,7 @@ opencode-sandbox new [DIR] [-n NAME] [-k KEY] [-p PROVIDER] [-- ARGS...]
 | `get NAME PATH...` | copy files or folders out of a sandbox (paths relative to `/workspace`) into the current folder |
 | `rm NAME...` / `rm --all [-y]` | delete sandboxes, their files and disposable keys |
 | `health` | check that sandboxes can run here, show how they're isolated and what you could install to isolate them better |
+| `setup [-y]` | install the strongest isolation this machine can have: Apple container on a Mac, gVisor on Linux. Shows what it will do and asks first (`-y`: doesn't ask) |
 | `build [ARGS]` | rebuild the image (ARGS go to `docker build` or `container build`) |
 | `agents [stop]` | show (or stop) the ssh-agents of open sandboxes |
 | `update [--check]` | update opencode-sandbox to the latest release (`--check`: only say whether there is one) |
@@ -415,7 +451,7 @@ In the sandbox:
 | `OPENCODE_SANDBOX_NO_AGENT` | `1` to use the no-agent mode ([Platforms](#platforms)) even where a host ssh-agent would work |
 | `OPENCODE_SANDBOX_SEED_HOSTS` | space-separated hosts whose keys are copied from `~/.ssh/known_hosts` into sandboxes; read when `known_hosts` is created, delete it to re-seed |
 | `OPENCODE_SANDBOX_ENGINE` | `docker` or `apple`: where new sandboxes go (default: Apple container where it runs, else Docker) |
-| `OPENCODE_SANDBOX_RUNTIME` | a Docker runtime for new sandboxes, e.g. `runsc` for gVisor ([Isolation](#isolation)) |
+| `OPENCODE_SANDBOX_RUNTIME` | a Docker runtime for new sandboxes, e.g. `runc` (default: gVisor where Docker has it, else Docker's own default; see [Isolation](#isolation)) |
 | `OPENCODE_SANDBOX_DEBUG` | `1` to print every command opencode-sandbox runs |
 
 To use another opencode release, pass its version and archive checksums:

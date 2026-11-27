@@ -11,7 +11,7 @@ import (
 
 func base(goos string) Facts {
 	return Facts{
-		Version: "0.5.0", GOOS: goos, Home: "/home/u", DockerCLI: true, Engine: "docker",
+		Version: "0.5.0", GOOS: goos, Machine: "amd64", Home: "/home/u", DockerCLI: true, Engine: "docker",
 		Image: "opencode-sandbox:0.5.0", ImageOK: true,
 		Config: "/home/u/.config/opencode/opencode.json", Providers: 2, PidsLimit: 1024,
 	}
@@ -51,7 +51,9 @@ func TestReport(t *testing.T) {
 				"~/.config/opencode/opencode.json, 2 providers", "Docker Desktop's Linux VM, shared",
 				"only a disposable key", "seccomp, at most 1024 processes",
 				"used       Docker Desktop: one Linux VM", "install    Apple container",
-				"`container system start`", "new sandboxes then use it"},
+				"`opencode-sandbox setup` installs it", "new sandboxes then use it",
+				"Next step", "run        `opencode-sandbox setup` sets up Apple container: each new sandbox gets a lightweight VM of its own",
+				"asks before doing it"},
 			[]string{"gVisor", "AppArmor", "no seccomp", "OPENCODE_SANDBOX_ENGINE"}},
 		{"Apple container used", func(f *Facts) {
 			f.AppleCLI, f.AppleVersion, f.AppleRunning, f.Engine = true, "1.7.1", true, "apple"
@@ -62,57 +64,81 @@ func TestReport(t *testing.T) {
 				"each has a network of its own", "the VM stands in for them",
 				"available  Docker Desktop: one Linux VM for all your containers; set OPENCODE_SANDBOX_ENGINE=docker to use it",
 				"used       Apple container 1.7.1"},
-			[]string{"  install    ", "seccomp", "Docker Desktop's Linux VM, shared"}},
+			[]string{"  install    ", "seccomp", "Docker Desktop's Linux VM, shared", "Next step"}},
 		{"Apple container used, no Docker", func(f *Facts) {
 			f.AppleCLI, f.AppleVersion, f.AppleRunning, f.Engine = true, "1.7.1", true, "apple"
 			f.Docker = nil
 		}, mac, true, []string{"--         can't reach Docker; only sandboxes made with it need it", "used       Apple container"},
 			[]string{"no   "}},
 		{"Apple container running, Docker chosen", func(f *Facts) {
-			f.AppleCLI, f.AppleVersion, f.AppleRunning = true, "1.7.1", true
-		}, mac, true, []string{"available  Apple container", "1.7.1 is running; unset OPENCODE_SANDBOX_ENGINE", "used       Docker Desktop"}, []string{"  install    "}},
+			f.AppleCLI, f.AppleVersion, f.AppleRunning, f.EngineEnv = true, "1.7.1", true, "docker"
+		}, mac, true, []string{"available  Apple container", "1.7.1 is running; unset OPENCODE_SANDBOX_ENGINE", "used       Docker Desktop"},
+			[]string{"  install    ", "Next step"}},
 		{"Apple container stopped", func(f *Facts) {
 			f.AppleCLI, f.AppleVersion = true, "1.7.1"
-		}, mac, true, []string{"--         Apple container 1.7.1 is installed but not running", "start      Apple container", "1.7.1 is installed"}, nil},
+		}, mac, true, []string{"--         Apple container 1.7.1 is installed but not running", "start      Apple container",
+			"1.7.1 is installed; `opencode-sandbox setup` (or `container system start`) starts it", "Next step"}, nil},
 		{"Apple container chosen but stopped", func(f *Facts) {
 			f.AppleCLI, f.AppleVersion, f.Engine = true, "1.7.1", ""
 			f.EngineErr = "OPENCODE_SANDBOX_ENGINE=apple, but Apple container isn't running here"
 		}, mac, false, []string{"no         OPENCODE_SANDBOX_ENGINE=apple, but"}, []string{"How a new sandbox"}},
 		{"Intel Mac", func(f *Facts) { f.AppleSilicon, f.Arch = false, "Intel" }, mac, true,
-			[]string{"(Intel)", "no         Apple container needs a Mac with Apple silicon"}, []string{"  install    "}},
+			[]string{"(Intel)", "no         Apple container needs a Mac with Apple silicon"}, []string{"  install    ", "Next step"}},
 		{"old macOS", func(f *Facts) { f.MacOS, f.System = 15, "macOS 15.6" }, mac, true,
 			[]string{"needs macOS 26 or later (this is macOS 15.6)"}, nil},
 		{"Linux with Docker Engine", nil, linux, true,
 			[]string{"Docker 29.0.0 (Ubuntu 24.04 LTS)", "this machine's kernel, shared",
 				"stays on this machine", "no-new-privileges, AppArmor, seccomp", "Namespaces and seccomp separate",
-				"used       Docker Engine", "install    gVisor", "`sudo runsc install`"},
+				"used       Docker Engine", "install    gVisor", "`opencode-sandbox setup` installs it",
+				"run        `opencode-sandbox setup` sets up gVisor: each new sandbox runs on a user-space kernel of its own"},
 			[]string{"Apple", "trade-off", "rootless", "Kata"}},
 		{"gVisor registered", func(f *Facts) { f.Docker.Runtimes["gvisor"] = backend.Runtime{Path: "/usr/local/bin/runsc"} }, linux, true,
-			[]string{"available  gVisor", "runtime gvisor; set OPENCODE_SANDBOX_RUNTIME=gvisor", "used       Docker Engine",
-				"--runtime runsc-ssh -- --host-uds=open"}, []string{"  install    "}},
+			[]string{"set up     gVisor", "Docker has it as runtime gvisor, which can't reach the host's ssh-agent",
+				"set OPENCODE_SANDBOX_RUNTIME=gvisor.", "used       Docker Engine", "`opencode-sandbox setup` adds a runtime that can",
+				"sets up gVisor with your ssh-agent"}, []string{"  install    "}},
 		{"gVisor registered twice", func(f *Facts) {
 			f.Docker.Runtimes["runsc"] = backend.Runtime{Path: "/usr/local/bin/runsc"}
 			f.Docker.Runtimes["runsc-ssh"] = backend.Runtime{Path: "/usr/local/bin/runsc", Args: []string{"--host-uds=open"}}
+			f.Runtime, f.RuntimeAuto = "runsc-ssh", true
 		}, linux, true,
-			[]string{"OPENCODE_SANDBOX_RUNTIME=runsc-ssh to use it."}, []string{"host-uds"}},
+			[]string{"boundary   gVisor (runtime runsc-ssh, used because Docker has it)", "stays on this machine",
+				"used       gVisor (runtime runsc-ssh, used because Docker has it)",
+				"available  Docker Engine: sandboxes share this machine's kernel; set OPENCODE_SANDBOX_RUNTIME=runc to use it"},
+			[]string{"host-uds", "Next step", "ssh-agent, for keys"}},
+		{"gVisor registered twice, plain Docker asked for", func(f *Facts) {
+			f.Docker.Runtimes["runsc"] = backend.Runtime{Path: "/usr/local/bin/runsc"}
+			f.Docker.Runtimes["runsc-ssh"] = backend.Runtime{Path: "/usr/local/bin/runsc", Args: []string{"--host-uds=open"}}
+			f.Runtime, f.RuntimeEnv = "runc", "runc"
+		}, linux, true,
+			[]string{"used       Docker Engine", "available  gVisor", "runtime runsc-ssh; unset OPENCODE_SANDBOX_RUNTIME to use it"},
+			[]string{"Next step"}},
 		{"gVisor chosen", func(f *Facts) {
 			f.Docker.Runtimes["runsc"] = backend.Runtime{Path: "/usr/local/bin/runsc"}
-			f.Runtime = "runsc"
+			f.Runtime, f.RuntimeEnv = "runsc", "runsc"
 			f.Agent = platform.Platform{NoAgentWhy: "gVisor (runtime runsc) lets sandboxes connect to an ssh-agent on this machine only if Docker starts it with --host-uds=open"}
 		}, linux, true,
 			[]string{"boundary   gVisor (runtime runsc, chosen with OPENCODE_SANDBOX_RUNTIME)", "only a disposable key",
-				"used       gVisor (runtime runsc, chosen", "--runtime runsc-ssh -- --host-uds=open", "available  Docker Engine"},
+				"used       gVisor (runtime runsc, chosen", "`opencode-sandbox setup` adds a runtime that may reach the host's ssh-agent",
+				"available  Docker Engine", "Next step"},
 			[]string{"  install    ", "this machine's kernel, shared"}},
+		{"gVisor chosen, though another reaches the agent", func(f *Facts) {
+			f.Docker.Runtimes["runsc"] = backend.Runtime{Path: "/usr/local/bin/runsc"}
+			f.Docker.Runtimes["runsc-ssh"] = backend.Runtime{Path: "/usr/local/bin/runsc", Args: []string{"--host-uds=open"}}
+			f.Runtime, f.RuntimeEnv = "runsc", "runsc"
+			f.Agent = platform.Platform{NoAgentWhy: "gVisor (runtime runsc) lets sandboxes connect to an ssh-agent on this machine only if Docker starts it with --host-uds=open"}
+		}, linux, true,
+			[]string{"used       gVisor (runtime runsc, chosen", "unset OPENCODE_SANDBOX_RUNTIME for a runtime that may reach"},
+			[]string{"Next step"}},
 		{"gVisor chosen, with host sockets", func(f *Facts) {
 			f.Docker.Runtimes["runsc"] = backend.Runtime{Path: "/usr/local/bin/runsc", Args: []string{"--host-uds=open"}}
-			f.Runtime = "runsc"
+			f.Runtime, f.RuntimeEnv = "runsc", "runsc"
 		}, linux, true,
-			[]string{"used       gVisor", "stays on this machine"}, []string{"host-uds"}},
+			[]string{"used       gVisor", "stays on this machine"}, []string{"host-uds", "Next step", "ssh-agent, for keys"}},
 		{"unknown runtime chosen", func(f *Facts) {
 			f.RuntimeErr = "OPENCODE_SANDBOX_RUNTIME=nope, but Docker has no runtime by that name (it has: runc)"
 		}, linux, false, []string{"no         OPENCODE_SANDBOX_RUNTIME=nope"}, nil},
-		{"gVisor installed, not registered", func(f *Facts) { f.RunscOnPath = true }, linux, true,
-			[]string{"set up     gVisor", "Docker doesn't know it"}, nil},
+		{"gVisor installed, not registered", func(f *Facts) { f.RunscPath = "/usr/bin/runsc" }, linux, true,
+			[]string{"set up     gVisor", "Docker doesn't know it: `opencode-sandbox setup` registers it", "Next step"}, nil},
 		{"gVisor is Docker's default", func(f *Facts) {
 			f.Docker.Runtimes["runsc"], f.Docker.DefaultRuntime = backend.Runtime{Path: "runsc"}, "runsc"
 		}, linux, true,
@@ -124,12 +150,19 @@ func TestReport(t *testing.T) {
 			f.Docker.SecurityOptions = append(f.Docker.SecurityOptions, "name=rootless")
 			f.Agent = platform.Platform{NoAgentWhy: "with rootless Docker or userns-remap, sandboxes don't run with your uid"}
 		}, linux, true,
-			[]string{"(Ubuntu 24.04 LTS, rootless)", "with your user's rights", "only a disposable key"}, nil},
+			[]string{"(Ubuntu 24.04 LTS, rootless)", "with your user's rights", "only a disposable key",
+				"install    gVisor", "With rootless Docker, it isn't set up for you: https://gvisor.dev"}, []string{"Next step"}},
+		{"Kata chosen", func(f *Facts) {
+			f.Docker.Runtimes["kata"] = backend.Runtime{Path: "/opt/kata/bin/kata-runtime"}
+			f.Runtime, f.RuntimeEnv = "kata", "kata"
+		}, linux, true, []string{"used       Kata Containers", "boundary   Kata Containers"}, []string{"gVisor", "Next step"}},
+		{"no gVisor build for this machine", func(f *Facts) { f.Machine, f.Arch = "riscv64", "riscv64" }, linux, true,
+			[]string{"no         gVisor has no build for riscv64"}, []string{"Next step"}},
 		{"Docker Desktop on Linux", func(f *Facts) {
 			f.Docker.OS, f.InVM = "Docker Desktop", true
 			f.Agent = platform.Platform{NoAgentWhy: "Docker Desktop runs containers in a VM"}
 		}, linux, true,
-			[]string{"Docker Desktop's Linux VM", "no         gVisor needs Docker Engine", "trade-off  Docker Engine instead"}, nil},
+			[]string{"Docker Desktop's Linux VM", "no         gVisor needs Docker Engine", "trade-off  Docker Engine instead"}, []string{"Next step"}},
 		{"seccomp off", func(f *Facts) { f.Docker.SecurityOptions = []string{"name=seccomp,profile=unconfined"} }, linux, true,
 			[]string{"no seccomp filter", "Namespaces separate"}, []string{"AppArmor", ", seccomp"}},
 		{"image not built", func(f *Facts) { f.ImageOK = false }, linux, true,
@@ -140,7 +173,8 @@ func TestReport(t *testing.T) {
 			[]string{"no         can't reach Docker", "install    Apple container"},
 			[]string{"How a new sandbox", "used ", "image"}},
 		{"no Docker on Linux", func(f *Facts) { f.Docker, f.DockerCLI, f.Engine = nil, false, "" }, linux, false,
-			[]string{"Docker isn't installed: https://docs.docker.com/engine/install/", "install    gVisor"}, nil},
+			[]string{"Docker isn't installed: https://docs.docker.com/engine/install/", "install    gVisor",
+				"Once Docker works, `opencode-sandbox setup` installs it"}, []string{"Next step"}},
 		{"root", func(f *Facts) { f.Root = true }, linux, false, []string{"you're root"}, nil},
 		{"no config", func(f *Facts) { f.ConfigErr = "missing" }, linux, false,
 			[]string{"no opencode config at ~/.config/opencode/opencode.json"}, nil},

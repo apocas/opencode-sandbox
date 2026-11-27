@@ -121,7 +121,8 @@ main() {
       say "  export PATH=\"$dir:\$PATH\""
       ;;
   esac
-  say "next: 'opencode-sandbox health' checks that sandboxes can run here; 'opencode-sandbox' opens the dashboard"
+  say "next: 'opencode-sandbox health' shows whether sandboxes can run here and how they're isolated,"
+  say "      'opencode-sandbox setup' installs what isolates them best, and 'opencode-sandbox' opens the dashboard"
 }
 
 # All of the script is read before any of it runs: half a download does nothing.

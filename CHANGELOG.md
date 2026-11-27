@@ -4,6 +4,37 @@ All notable changes to opencode-sandbox. Versions follow
 [Semantic Versioning](https://semver.org); each release is tagged `vX.Y.Z`.
 To update, see [Updating](README.md#updating).
 
+## [0.8.0] - 2026-11-27
+
+### Added
+
+- `opencode-sandbox setup` installs the strongest isolation the machine can
+  have, after showing every step and command and asking: on a Mac (Apple
+  silicon, macOS 26 or later) Apple container, whose installer it downloads,
+  checks for Apple's signature, runs and starts; on Linux with Docker Engine
+  gVisor, which it downloads, checks against its published SHA-512, installs in
+  `/usr/local/bin` and registers with Docker as runtimes `runsc` and
+  `runsc-ssh`. Steps that need root run with `sudo`. Where nothing stronger can
+  be installed, it says why.
+- `health` ends with a "Next step" when `setup` has something to install, and
+  its options name `setup` instead of commands to type.
+- The dashboard's header shows when new sandboxes run on gVisor.
+
+### Changed
+
+- New sandboxes run on gVisor by themselves where Docker has it, as they
+  already go to Apple container where that runs: no more
+  `OPENCODE_SANDBOX_RUNTIME=runsc`. A gVisor runtime that can't reach the
+  host's ssh-agent is only picked where no agent could serve sandboxes anyway,
+  so nobody loses keys from `~/.ssh` by it. `OPENCODE_SANDBOX_RUNTIME=runc`
+  keeps new sandboxes on plain Docker. Sandboxes you already have don't change.
+
+### Fixed
+
+- Apple container: sandboxes showed as "new" instead of "closed" once its
+  service had been restarted or the Mac rebooted. They opened and continued
+  their session as usual; only the state shown was wrong.
+
 ## [0.7.0] - 2026-11-27
 
 ### Added
@@ -219,6 +250,7 @@ First release.
   `--resume` warns about sandboxes created by an older version.
 - Bundles opencode 2.4.2 (x86_64 and arm64 builds, checksums verified).
 
+[0.8.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.8.0
 [0.7.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.7.0
 [0.6.1]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.6.1
 [0.6.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.6.0

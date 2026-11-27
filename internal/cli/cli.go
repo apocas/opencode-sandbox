@@ -113,6 +113,8 @@ func (x *cli) main(args []string) (int, error) {
 		return x.health()
 	case "update": // needs no engine, and may run as root where the program is root's
 		return x.update(rest)
+	case "setup": // what it sets up may be the engine
+		return x.setup(rest)
 	}
 	if to, ok := renamed[cmd]; ok {
 		return 0, usagef("%s is now: opencode-sandbox %s (see: opencode-sandbox help)", cmd, to)
