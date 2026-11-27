@@ -68,7 +68,7 @@ func TestWriteConfigKeepsSecretsHere(t *testing.T) {
 				return string(data)
 			}
 
-			if err := a.writeConfig(e, "demo", "a,nowhere,keyless", true); err != nil {
+			if err := a.writeConfig(e, "demo", "a,nowhere,keyless", true, false); err != nil {
 				t.Fatal(err)
 			}
 			cfg := read()
@@ -103,7 +103,7 @@ func TestWriteConfigKeepsSecretsHere(t *testing.T) {
 			}
 
 			// Each start gets a token of its own.
-			if err := a.writeConfig(e, "demo", "a", true); err != nil {
+			if err := a.writeConfig(e, "demo", "a", true, false); err != nil {
 				t.Fatal(err)
 			}
 			if strings.Contains(read(), st.Token) {
@@ -111,7 +111,7 @@ func TestWriteConfigKeepsSecretsHere(t *testing.T) {
 			}
 
 			// Without a gateway (a sandbox from before 0.9.0): as it always was.
-			if err := a.writeConfig(e, "demo", "a", false); err != nil {
+			if err := a.writeConfig(e, "demo", "a", false, false); err != nil {
 				t.Fatal(err)
 			}
 			if cfg := read(); !strings.Contains(cfg, "SECRET-A") || !strings.Contains(cfg, "https://one.example/v1") {

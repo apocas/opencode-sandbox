@@ -6,17 +6,16 @@
 # this machine; no real one is called) and its own data folder. It touches no other sandbox: where you have some, the steps that
 # act on "all" or "the first" sandbox are skipped.
 #
-# Usage: [EXPECT_RUNTIME=NAME] test/integration.sh BINARY [BASH_LAUNCHER]
+# Usage: [EXPECT_RUNTIME=NAME] [IT_OWN_ONLY=1] test/integration.sh BINARY
+#   IT_OWN_ONLY    never act on "all" sandboxes, even where there are none
+#                  but the test's: for a machine where you may make one
+#                  while this runs
 #   EXPECT_RUNTIME the Docker runtime new sandboxes must get without being
 #                  asked for one (runsc-ssh after `opencode-sandbox setup`)
 #   BINARY         the opencode-sandbox binary to test
-#   BASH_LAUNCHER  optional: the bash launcher of v0.4.0 (opencode-sandbox
-#                  script in a checkout of that tag), to test that sandboxes
-#                  made by either can be managed by the other
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
-OLD="${2:-}"
 T="$(mktemp -d)"
 T="$(cd "$T" && pwd -P)"
 export XDG_DATA_HOME="$T/data" OPENCODE_SANDBOX_CONFIG="$T/one.json"
@@ -109,7 +108,13 @@ echo "== engine: $ENGINE"
 # the first sandbox of the list are not run: they would hit yours.
 names() { "$BIN" ls 2>/dev/null | awk 'NR > 1 && $1 != "*" && $2 != "" { print $2 }'; }
 FOREIGN="$(names | grep -vc '^it-' || true)"
-skip() { echo "  skip  $1 (you have $FOREIGN sandboxes of your own here)"; }
+# ALL: it may act on every sandbox there is. Not with sandboxes of yours
+# around, nor with IT_OWN_ONLY set: for a machine where you may make one
+# while this runs.
+ALL=1; why="you have $FOREIGN sandboxes of your own here"
+(( FOREIGN == 0 )) || ALL=0
+[[ -z "${IT_OWN_ONLY:-}" ]] || { ALL=0; why="IT_OWN_ONLY is set"; }
+skip() { echo "  skip  $1 ($why)"; }
 # none DESC: no it-* sandbox is listed
 none() {
   if names | grep -q '^it-'; then bad "$1" "$("$BIN" ls 2>&1)"; else ok "$1"; fi
@@ -129,7 +134,7 @@ refuse "invalid name" 'invalid sandbox name' "$BIN" new "$T/ws" -n '-bad' -k non
 refuse "home folder refused" 'contains your home directory' "$BIN" new "$HOME" -k none
 refuse "~/.ssh refused" 'inside ~/.ssh' "$BIN" new "$HOME/.ssh" -k none
 refuse "no key without a terminal" 'pass -k NAME' "$BIN" new "$T/ws" -n it-x
-if (( FOREIGN == 0 )); then check "ls empty" 'no sandboxes' "$BIN" ls; else none "ls has none of the test's"; fi
+if (( ALL )); then check "ls empty" 'no sandboxes' "$BIN" ls; else none "ls has none of the test's"; fi
 check  "health" 'used +(Docker|gVisor|Apple container)' "$BIN" health
 check  "health: API keys stay on this machine" 'api keys +stay on this machine' "$BIN" health
 OPENCODE_SANDBOX_GATEWAY=off check "health: unless the gateway is off" '\(OPENCODE_SANDBOX_GATEWAY is off\)' "$BIN" health
@@ -179,7 +184,7 @@ check  "open NAME" 'opencode v?[0-9]' "$BIN" open it-b
 refuse "open without a name or terminal" 'open needs a sandbox name' "$BIN" open
 check  "agents" 'no sandbox agents running|\(' "$BIN" agents
 # (stopping every agent would cut SSH in sandboxes of yours that are open)
-if (( FOREIGN == 0 )); then check "agents stop" 'all sandbox ssh-agents stopped' "$BIN" agents stop; else skip "agents stop"; fi
+if (( ALL )); then check "agents stop" 'all sandbox ssh-agents stopped' "$BIN" agents stop; else skip "agents stop"; fi
 
 echo "== on a terminal"
 rm -f "$DATA/known_hosts"
@@ -191,7 +196,7 @@ fi
 out="$(OPENCODE_SANDBOX_CONFIG="$T/two.json" pty "space down space enter" "$BIN" new -n it-d -k none -- --version 2>&1)"
 grep -q 'Which opencode providers' <<<"$out" && grep -q 'opening sandbox' <<<"$out" && ok "provider picker" || bad "provider picker" "$out"
 check "both providers chosen" 'it-d .*(p1,p2|p2,p1)' "$BIN" ls
-if (( FOREIGN == 0 )); then
+if (( ALL )); then
   out="$(pty "enter" "$BIN" open 2>&1)"
   grep -q 'Open which sandbox' <<<"$out" && grep -q 'opening sandbox' <<<"$out" && ok "sandbox picker" || bad "sandbox picker" "$out"
 else
@@ -199,8 +204,10 @@ else
 fi
 # The dashboard: the list, the health report and back, the new-sandbox form
 # and back without creating one, then quit.
+listed="$(names | grep -c . || true)"
 out="$(pty "h wait esc n wait esc q" "$BIN" 2>&1)"
-grep -q "Sandboxes ($((4 + FOREIGN)))" <<<"$out" && grep -q 'it-d' <<<"$out" && grep -q 'How a new sandbox is isolated' <<<"$out" \
+grep -q "Sandboxes ($listed)" <<<"$out" && grep -q 'it-d' <<<"$out" && grep -q 'How a new sandbox is isolated' <<<"$out" \
+  && grep -q 'a copy of your folder · a key of its own · no API keys' <<<"$out" \
   && ok "dashboard" || bad "dashboard" "$(tail -c 3000 <<<"$out")"
 grep -q 'Folder to copy' <<<"$out" && grep -q 'no sandbox created' <<<"$out" \
   && ok "dashboard: esc leaves the new-sandbox form" || bad "dashboard: esc leaves the new-sandbox form" "$(tail -c 3000 <<<"$out")"
@@ -269,39 +276,51 @@ out="$(pty "wait enter" "$BIN" new "$T/dots" -n it-g -k none -- --version 2>&1)"
 grep -q 'Press enter to copy it as it is' <<<"$out" && grep -q 'opening sandbox' <<<"$out" && ok "on a terminal it asks first" || bad "on a terminal it asks first" "$out"
 check "cp names them too" 'is a dot file, which often holds secrets' "$BIN" cp it-f "$T/dots/.env"
 
+echo "== without a network, and where it runs"
+# No network: opencode still reaches its provider, through the gateway, and
+# needs no SSH key (none is asked for, even without a terminal).
+: >"$T/provider.log"
+check "a sandbox without a network reaches its provider" 'the gateway works' "$BIN" new "$T/ws" -n it-m --network none -- run hello
+grep -q "\"authorization\": \"Bearer $REAL_KEY\"" "$T/provider.log" && ok "through the gateway" || bad "through the gateway" "$(cat "$T/provider.log")"
+if [[ "$ENGINE" == apple ]]; then
+  container inspect opencode-sandbox-it-m | tr -d ' \n' | grep -q '"networks":\[\]' && ok "it is on no network" || bad "it is on no network"
+else
+  [[ "$(docker inspect -f '{{.HostConfig.NetworkMode}}' opencode-sandbox-it-m)" == none ]] && ok "it is on no network" || bad "it is on no network"
+fi
+check "ls shows that" 'it-m .* none +none ' "$BIN" ls
+check "ls: the others are open" 'it-q .* open ' "$BIN" ls
+OPENCODE_SANDBOX_NETWORK=none check "none can be the default" 'opencode v?[0-9]' "$BIN" new "$T/ws" -n it-o -- --version
+check "ls shows the default's too" 'it-o .* none +none ' "$BIN" ls
+OPENCODE_SANDBOX_NETWORK=none check "health names the default" 'network +none \(OPENCODE_SANDBOX_NETWORK\)' "$BIN" health
+refuse "no SSH key without a network" 'gets no SSH key' "$BIN" new "$T/ws" -n it-x --network none -k new
+refuse "no network without the gateway" 'with the gateway off' "$BIN" new "$T/ws" -n it-x --network none --gateway off
+refuse "an unknown network" 'must be open or none' "$BIN" new "$T/ws" -n it-x --network lan -k none
+refuse "an unknown engine" '--engine must be docker or apple' "$BIN" new "$T/ws" -n it-x --engine podman -k none
+refuse "an unknown gateway choice" '--gateway must be on or off' "$BIN" new "$T/ws" -n it-x --gateway maybe -k none
+# Where it runs, asked for: the engine in use, by name; and in Docker a runtime.
+check "the engine asked for" 'opencode v?[0-9]' "$BIN" new "$T/ws" -n it-r --engine "$ENGINE" --gateway off -k none -- --version
+check "ls: and without a gateway, as asked" 'it-r .* p1\* ' "$BIN" ls
+if [[ "$ENGINE" == apple ]]; then
+  refuse "a Docker runtime where it goes to Apple container" '--runtime runc chooses a Docker runtime' "$BIN" new "$T/ws" -n it-x --runtime runc -k none
+else
+  check "the runtime asked for" 'opencode v?[0-9]' "$BIN" new "$T/ws" -n it-s --runtime runc -k none -- --version
+  [[ "$(docker inspect -f '{{.HostConfig.Runtime}}' opencode-sandbox-it-s)" == runc ]] && ok "created with it" || bad "created with it"
+  refuse "a runtime Docker hasn't" '--runtime nope, but Docker has no runtime by that name' "$BIN" new "$T/ws" -n it-x --runtime nope -k none
+fi
+
 echo "== delete"
 out="$("$BIN" rm it-a it-b it-nope 2>&1)"
 grep -q 'removed it-a and its disposable key SHA256' <<<"$out" && grep -q "no sandbox named 'it-nope'" <<<"$out" \
   && ok "rm" || bad "rm" "$out"
 [[ ! -e "$DATA/keys/it-a" ]] && ok "disposable key deleted" || bad "disposable key deleted"
 refuse "rm --all needs -y without a terminal" 'add -y' "$BIN" rm --all
-if (( FOREIGN == 0 )); then
+if (( ALL )); then
   check "rm --all -y" 'removed it-c' "$BIN" rm --all -y
   check "ls empty again" 'no sandboxes' "$BIN" ls
 else
   skip "rm --all -y"
-  check "rm the rest by name" 'removed it-c' "$BIN" rm it-c it-d it-h it-q it-k it-e it-f it-g
+  check "rm the rest by name" 'removed it-c' "$BIN" rm it-c it-d it-h it-q it-k it-e it-f it-g it-m it-o it-r it-s
   none "ls has none of the test's again"
-fi
-
-if [[ -n "$OLD" && "$ENGINE" == docker ]]; then
-  echo "== compatibility with $("$OLD" --version)"
-  OLDDIR="$(cd "$(dirname "$OLD")" && pwd)"
-  check "bash creates (disposable key)" 'opencode v?[0-9]' "$OLD" -n it-old-a -k new -- --version
-  check "bash creates (no key)" 'opencode v?[0-9]' "$OLD" -n it-old-b -k none -- --version
-  check "Go lists them" 'it-old-a +closed.*disposable' "$BIN" ls
-  check "Go prints the bash key" "$(cut -d' ' -f2 "$OLDDIR/keys/it-old-a.pub" | sed 's/[+/]/./g')" "$BIN" key it-old-a
-  check "Go opens a bash sandbox" 'opencode v?[0-9]' "$BIN" open it-old-a
-  mv "$OLDDIR/known_hosts" "$OLDDIR/known_hosts.moved"
-  refuse "Go explains a deleted clone" 'needs .*known_hosts, which no longer exists' "$BIN" open it-old-a
-  mv "$OLDDIR/known_hosts.moved" "$OLDDIR/known_hosts"
-  refuse "Go refuses the bash clone's keys" 'disposable keys' "$BIN" cp it-old-b "$OLDDIR/keys"
-  check "Go copies into a bash sandbox" 'copied' "$BIN" cp it-old-b "$T/extra.txt"
-  check "Go creates" 'opencode v?[0-9]' "$BIN" new -n it-new -k new -- --version
-  check "bash lists a Go sandbox" 'it-new +disposable' "$OLD" --list
-  check "bash resumes a Go sandbox" 'opencode v?[0-9]' "$OLD" --resume it-new
-  check "Go deletes the bash sandboxes" 'removed it-old-a and its disposable key' "$BIN" rm it-old-a it-old-b it-new
-  [[ ! -e "$OLDDIR/keys/it-old-a" ]] && ok "bash's disposable key deleted" || bad "bash's disposable key deleted"
 fi
 
 echo "== $pass passed, $fail failed"

@@ -10,6 +10,7 @@ type Row struct {
 
 	Runtime string // the OCI runtime it was created with ("" before 0.5.0)
 	Gateway string // set if its API keys stay on this machine ("" before 0.9.0)
+	Network string // "none" if it has no network ("" before 0.10.0: open)
 	Engine  string // the Name of the engine it lives in
 	Version string // the opencode-sandbox that created it ("" before 0.1)
 }
@@ -30,6 +31,9 @@ type Spec struct {
 	Binds     []Bind
 	Tmpfs     []string // e.g. "/tmp:exec,size=1g,mode=1777"
 	Network   string
+	// NoNetwork: it gets no network at all, only its own loopback; Network
+	// is then left aside.
+	NoNetwork bool
 	Runtime   string // OCI runtime, e.g. "runsc" for gVisor; "" for the default
 
 	Init            bool // a tiny init as PID 1 (signals, reaping)

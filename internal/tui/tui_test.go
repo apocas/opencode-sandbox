@@ -477,3 +477,71 @@ func TestCompletingUnderHome(t *testing.T) {
 		}
 	}
 }
+
+// ctrl+o adds the options that have defaults to the form, after its last
+// field; without it, they aren't asked and a sandbox gets the defaults.
+func TestFormMoreOptions(t *testing.T) {
+	m := withForm(t)
+	out := screen(t, m, 110, 32)
+	if !strings.Contains(out, "ctrl+o more options") || strings.Contains(out, "Runs in") {
+		t.Errorf("the form before ctrl+o:\n%s", out)
+	}
+	if o := m.nf.options("x"); o.Network != "open" || o.Gateway != "on" || o.Engine != "" || o.Runtime != "" || o.Key != "new" {
+		t.Errorf("what's asked for without more options: %+v", o)
+	}
+	enter := press("enter")
+	walk := func(keys ...tea.KeyPressMsg) {
+		t.Helper()
+		for _, k := range keys {
+			_, cmd := m.Update(k)
+			pump(m, cmd, 6)
+		}
+	}
+	walk(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
+	out = screen(t, m, 110, 32)
+	if !m.nf.more || strings.Contains(out, "ctrl+o more options") || !strings.Contains(out, "more options follow the last field") {
+		t.Fatalf("after ctrl+o: more %v\n%s", m.nf.more, out)
+	}
+	// Through the first page: folder, name, key, a provider.
+	walk(enter, enter, enter, tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}, enter)
+	out = screen(t, m, 110, 32)
+	for _, want := range []string{"New sandbox: more options", "Network", "open", "none", "only its providers, through the gateway", "Runs in", "API keys", "on this machine", "inside the sandbox"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the second page lacks %q:\n%s", want, out)
+		}
+	}
+	if m.mode != formMode {
+		t.Fatalf("the form ended before its second page: mode %v", m.mode)
+	}
+	// No network: no key, whatever was picked before; and the gateway.
+	walk(press("j"), enter)
+	if m.nf.network != "none" {
+		t.Fatalf("network picked: %q", m.nf.network)
+	}
+	if o := m.nf.options("x"); o.Network != "none" || o.Key != "none" || len(o.Providers) != 1 {
+		t.Errorf("what's asked for without a network: %+v", o)
+	}
+	m.nf.gateway = "off"
+	if o := m.nf.options("x"); o.Gateway != "off" {
+		t.Errorf("gateway off: %+v", o)
+	}
+	// Where it runs, as the form holds it.
+	for v, want := range map[string][2]string{"|": {"", ""}, "apple|": {"apple", ""}, "docker|runsc-ssh": {"docker", "runsc-ssh"}} {
+		if e, rt := placeOf(v); e != want[0] || rt != want[1] {
+			t.Errorf("placeOf(%q) = %q, %q", v, e, rt)
+		}
+	}
+}
+
+// Where new sandboxes get no network by default, the form says so, and
+// asks for none without more being asked.
+func TestFormWithoutNetworkByDefault(t *testing.T) {
+	t.Setenv(core.NetworkEnv, "none")
+	m := withForm(t)
+	if out := screen(t, m, 110, 32); !strings.Contains(out, "new sandboxes get no network (OPENCODE_SANDBOX_NETWORK)") {
+		t.Errorf("the form doesn't say so:\n%s", out)
+	}
+	if o := m.nf.options("x"); o.Network != "none" || o.Key != "none" {
+		t.Errorf("what's asked for: %+v", o)
+	}
+}

@@ -4,10 +4,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/apocas/opencode-sandbox/internal/backend"
+	"github.com/apocas/opencode-sandbox/internal/platform"
 	"github.com/apocas/opencode-sandbox/internal/run"
 )
 
@@ -139,3 +141,158 @@ func TestDefaultNameSanitizes(t *testing.T) {
 type existsNever struct{ backend.Engine }
 
 func (existsNever) Exists(string) bool { return false }
+
+// named is an engine of which only the name matters.
+type named struct {
+	backend.Engine
+	name string
+}
+
+func (n named) Name() string { return n.name }
+
+func TestPlace(t *testing.T) {
+	for _, v := range []string{"OPENCODE_SANDBOX_ENGINE", "OPENCODE_SANDBOX_RUNTIME", "OPENCODE_SANDBOX_NO_AGENT"} {
+		t.Setenv(v, "")
+	}
+	info := backend.Info{DefaultRuntime: "runc", Runtimes: map[string]backend.Runtime{
+		"runc": {Path: "runc"}, "runsc": {Path: "/usr/local/bin/runsc"},
+		"runsc-ssh": {Path: "/usr/local/bin/runsc", Args: []string{"--host-uds=open"}},
+	}}
+	both := &Core{engines: []backend.Engine{named{name: "docker"}, named{name: "apple"}}, dockerInfo: info}
+	docker := &Core{engines: []backend.Engine{named{name: "docker"}}, dockerInfo: info}
+	cases := []struct {
+		name          string
+		c             *Core
+		engine, rt    string
+		env           [2]string // a variable and its value
+		wantE, wantRT string
+		wantErr       string
+		wantNotInErr  string
+	}{
+		{name: "by itself, Apple container where it runs", c: both, wantE: "apple"},
+		{name: "by itself, Docker elsewhere", c: docker, wantE: "docker"},
+		{name: "Docker asked for", c: both, engine: "docker", wantE: "docker"},
+		{name: "a runtime asked for", c: both, engine: "docker", rt: "runsc", wantE: "docker", wantRT: "runsc"},
+		{name: "the environment's engine", c: both, env: [2]string{"OPENCODE_SANDBOX_ENGINE", "docker"}, wantE: "docker"},
+		{name: "the option wins over the environment", c: both, engine: "apple", env: [2]string{"OPENCODE_SANDBOX_ENGINE", "docker"}, wantE: "apple"},
+		{name: "the environment's runtime", c: docker, env: [2]string{"OPENCODE_SANDBOX_RUNTIME", "runsc"}, wantE: "docker", wantRT: "runsc"},
+		// What can't be: the error names the option that asked, or else the variable.
+		{name: "an engine that isn't one", c: both, engine: "podman", wantErr: `--engine must be docker or apple, not "podman"`},
+		{name: "an engine that isn't running", c: docker, engine: "apple", wantErr: "--engine apple, but Apple container isn't running here", wantNotInErr: "OPENCODE_SANDBOX_ENGINE"},
+		{name: "the environment's engine isn't running", c: docker, env: [2]string{"OPENCODE_SANDBOX_ENGINE", "apple"}, wantErr: "OPENCODE_SANDBOX_ENGINE=apple, but Apple container isn't running here"},
+		{name: "a runtime Docker hasn't", c: docker, rt: "nope", wantErr: "--runtime nope, but Docker has no runtime by that name (it has: runc, runsc, runsc-ssh)", wantNotInErr: "OPENCODE_SANDBOX_RUNTIME"},
+		{name: "the environment's runtime Docker hasn't", c: docker, env: [2]string{"OPENCODE_SANDBOX_RUNTIME", "nope"}, wantErr: "OPENCODE_SANDBOX_RUNTIME=nope, but Docker has no runtime"},
+		{name: "a runtime where it goes to Apple container", c: both, rt: "runsc", wantErr: "--runtime runsc chooses a Docker runtime, but the sandbox would go to Apple container; add --engine docker"},
+		{name: "the environment's runtime where it goes to Apple container", c: both, env: [2]string{"OPENCODE_SANDBOX_RUNTIME", "runsc"},
+			wantErr: "OPENCODE_SANDBOX_RUNTIME=runsc chooses a Docker runtime, but new sandboxes go to Apple container; set OPENCODE_SANDBOX_ENGINE=docker to use Docker"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if c.env[0] != "" {
+				t.Setenv(c.env[0], c.env[1])
+			}
+			e, plat, err := c.c.place(c.engine, c.rt)
+			if c.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantErr) || c.wantNotInErr != "" && strings.Contains(err.Error(), c.wantNotInErr) {
+					t.Fatalf("error %v, want %q", err, c.wantErr)
+				}
+				if c.c.CheckPlace(c.engine, c.rt) == nil {
+					t.Error("CheckPlace finds nothing wrong")
+				}
+				return
+			}
+			// (Left to itself, the runtime depends on the system the test runs on.)
+			if err != nil || e.Name() != c.wantE || c.rt+c.env[1] != "" && c.wantRT != "" && plat.Runtime != c.wantRT {
+				t.Errorf("engine %v, runtime %q, error %v; want %s and %q", e, plat.Runtime, err, c.wantE, c.wantRT)
+			}
+		})
+	}
+}
+
+func TestPlaces(t *testing.T) {
+	for _, v := range []string{"OPENCODE_SANDBOX_ENGINE", "OPENCODE_SANDBOX_RUNTIME", "OPENCODE_SANDBOX_NO_AGENT"} {
+		t.Setenv(v, "")
+	}
+	info := backend.Info{OS: "Ubuntu 24.04", DefaultRuntime: "runc", Runtimes: map[string]backend.Runtime{
+		"runc": {Path: "runc"}, "io.containerd.runc.v2": {Path: "runc"}, "runsc": {Path: "/usr/local/bin/runsc"},
+		"gone": {Path: "/usr/local/bin/runsc", Missing: true},
+	}}
+	// The first is where it goes by itself; the order of the rest, and
+	// what a plain container shares, depend on the system the test runs on.
+	shared := "on this machine's kernel"
+	if platform.InVM(info) {
+		shared = "in the VM your containers share"
+	}
+	list := func(a *Core) string {
+		var out []string
+		for _, p := range a.Places() {
+			out = append(out, p.Engine+"|"+p.Runtime+" "+p.Label+": "+strings.Replace(p.Detail, shared, "SHARED", 1))
+		}
+		if len(out) > 1 {
+			sort.Strings(out[1:])
+		}
+		return strings.Join(out, "\n")
+	}
+	both := &Core{engines: []backend.Engine{named{name: "docker"}, named{name: "apple"}}, dockerInfo: info}
+	want := strings.Join([]string{
+		"| automatic: Apple container: a VM of its own",
+		"apple| Apple container: a VM of its own",
+		"docker|runc Docker: a hardened container SHARED (runtime runc)",
+		"docker|runsc Docker with gVisor: a kernel of its own (runtime runsc)",
+	}, "\n")
+	if got := list(both); got != want {
+		t.Errorf("places:\n%s\nwant:\n%s", got, want)
+	}
+	// Docker alone, without gVisor: by itself, and the same asked for.
+	plain := &Core{engines: []backend.Engine{named{name: "docker"}},
+		dockerInfo: backend.Info{DefaultRuntime: "runc", Runtimes: map[string]backend.Runtime{"runc": {Path: "runc"}}}}
+	want = "| automatic: Docker: a hardened container SHARED (runtime runc)\n" +
+		"docker|runc Docker: a hardened container SHARED (runtime runc)"
+	if got := list(plain); got != want {
+		t.Errorf("places:\n%s\nwant:\n%s", got, want)
+	}
+	if got := list(&Core{}); got != "" {
+		t.Errorf("places where nothing runs: %q", got)
+	}
+}
+
+func TestNetworkAndGatewayAskedFor(t *testing.T) {
+	t.Setenv(NetworkEnv, "")
+	t.Setenv("OPENCODE_SANDBOX_GATEWAY", "")
+	for _, c := range []struct{ want, env, got, err string }{
+		{"", "", "open", ""}, {"open", "none", "open", ""}, {"none", "", "none", ""}, {"", "none", "none", ""}, {"", "open", "open", ""},
+		{"sideways", "", "", `--network must be open or none, not "sideways"`}, {"", "off", "", `OPENCODE_SANDBOX_NETWORK must be open or none, not "off"`},
+	} {
+		t.Setenv(NetworkEnv, c.env)
+		got, err := NetworkFor(c.want)
+		if got != c.got || (err == nil) != (c.err == "") || err != nil && err.Error() != c.err {
+			t.Errorf("asked %q with %s=%q: %q, %v; want %q, %q", c.want, NetworkEnv, c.env, got, err, c.got, c.err)
+		}
+	}
+	for _, c := range []struct {
+		want, env string
+		got, ok   bool
+	}{{"", "", true, true}, {"", "off", false, true}, {"on", "off", true, true}, {"off", "", false, true}, {"maybe", "", false, false}} {
+		t.Setenv("OPENCODE_SANDBOX_GATEWAY", c.env)
+		if got, err := gatewayFor(c.want); got != c.got || (err == nil) != c.ok {
+			t.Errorf("gateway asked %q with the variable %q: %v, %v", c.want, c.env, got, err)
+		}
+	}
+	// A sandbox without a network: no gateway off, no key, before anything is made.
+	a := &Core{engines: []backend.Engine{named{name: "apple"}}, Rep: Plain{}}
+	t.Setenv(NetworkEnv, "")
+	for _, c := range []struct {
+		o    CreateOptions
+		want string
+	}{
+		{CreateOptions{Network: "none", Gateway: "off"}, "can't be made with the gateway off"},
+		{CreateOptions{Network: "none", Key: "new"}, "so it gets no SSH key; leave -k out"},
+		{CreateOptions{Network: "ether"}, "--network must be open or none"},
+		{CreateOptions{Gateway: "maybe"}, "--gateway must be on or off"},
+		{CreateOptions{Engine: "docker"}, "--engine docker, but"},
+	} {
+		if _, err := a.Create(c.o); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%+v: %v, want %q", c.o, err, c.want)
+		}
+	}
+}

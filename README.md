@@ -95,6 +95,9 @@ down:
   [gVisor](https://gvisor.dev), a separate user-space kernel. `health` shows
   what this machine has and what you could install
   ([Isolation](#isolation)).
+- **No network at all, if you want.** `--network none` makes a sandbox that
+  reaches nothing but its LLM providers, through the gateway: not the
+  internet, not your network, not your machine ([Network](#network)).
 - **As many sandboxes as you like.** Every run creates a new one. List them,
   resume one (continuing its last opencode session), or delete them.
 
@@ -162,6 +165,29 @@ so too.
 
 `OPENCODE_SANDBOX_GATEWAY=off` creates sandboxes without a gateway, with the
 keys in their config.
+
+## Network
+
+A sandbox's network is one of two, chosen when it's created:
+
+| `--network` | What the sandbox reaches |
+|---|---|
+| `open` (the default) | the internet, your network and services listening on your machine; not other sandboxes |
+| `none` | nothing but its providers, through the [gateway](#api-keys) |
+
+With `none` the sandbox has only its own loopback interface. opencode still
+works, because what it sends its providers travels over the gateway and not
+over a network. So a prompt-injected agent has nowhere to send your code, and
+can't reach your machine's services or a cloud's metadata endpoint. What you
+give up: no SSH (so no key is asked for), no `git pull`, no package installs,
+no web fetches. It suits work on code that's all in the folder.
+
+Every provider of such a sandbox goes through the gateway, the ones without an
+API key too (a model server on your own machine, say), so each needs a known
+address ([API keys](#api-keys)); and the gateway can't be off.
+
+`OPENCODE_SANDBOX_NETWORK=none` makes it the default for new sandboxes. `ls`
+shows each sandbox's network; it can't be changed afterwards.
 
 ## Isolation
 
@@ -281,7 +307,7 @@ Other ways:
 check it against `SHA256SUMS`, and put it on your `PATH`:
 
 ```bash
-v=0.9.2 os=$(uname -s | tr A-Z a-z) arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+v=0.10.0 os=$(uname -s | tr A-Z a-z) arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 f=opencode-sandbox_${v}_${os}_${arch}
 curl -fLO https://github.com/apocas/opencode-sandbox/releases/download/v$v/$f
 curl -fL https://github.com/apocas/opencode-sandbox/releases/download/v$v/SHA256SUMS | grep " $f\$" | shasum -a 256 -c
@@ -329,12 +355,14 @@ clone:
 cd /path/to/opencode-sandbox           # your clone
 git checkout master && git pull        # the latest code
 # or a specific release:
-git fetch --tags && git checkout v0.9.2
+git fetch --tags && git checkout v0.10.0
 opencode-sandbox version
 ```
 
 - The next run builds the image for the new version by itself (or run
   `opencode-sandbox build`).
+- **Coming from 0.9 or earlier:** `ls` has a NETWORK column, after RUNS IN: a
+  script that reads its columns by position needs a look.
 - **Coming from 0.9.0:** update. Its gateway passed on any kind of request,
   `TRACE` among them, which a provider's API that answers it sends back with
   the key in it (see the [changelog](CHANGELOG.md)).
@@ -353,12 +381,6 @@ opencode-sandbox version
   `--status` and `--stop-agent` are `agents` and `agents stop`, and creating a
   sandbox is `new [DIR]` (no more `-w`). An old option tells you its new
   command. Your sandboxes are unchanged.
-- **Coming from 0.4 or earlier:** new disposable keys and `known_hosts` are
-  kept in `~/.local/share/opencode-sandbox/` instead of the clone. Sandboxes you
-  already have still use the `keys/` and `known_hosts` in your clone, so keep
-  the clone until you've deleted them (`rm` deletes their keys there too). An
-  installed binary manages them as well. Run from the clone, the first new
-  sandbox also copies the clone's `known_hosts`.
 - Sandboxes you already have keep the image and settings they were created
   with; `open` tells you when a sandbox is older than the launcher. To move
   to the new version, create a new sandbox and delete the old one with `rm`.
@@ -402,11 +424,14 @@ opencode-sandbox open api                      # continue where you left off
 
 ### The dashboard
 
+It opens with a second of intro, the name being written while a wall goes up
+around it. Any key skips it; `OPENCODE_SANDBOX_INTRO=off` turns it off.
+
 | Key | |
 |---|---|
 | `↑` `↓` (`k` `j`) | move |
 | `enter` | open the sandbox, continuing its last session (or attach to it if it's open) |
-| `n` | create a sandbox: a short form (`enter` next field, `shift-tab` previous, `tab` completes the folder) |
+| `n` | create a sandbox: a short form (`enter` next field, `shift-tab` previous, `tab` completes the folder). `ctrl-o` in it asks more: the network, where it runs, where its API keys are |
 | `esc` | back: leaves a form or dialog without doing anything, as does `ctrl-c`. While a sandbox is being created, it goes back to the list and the work carries on |
 | `s` | bash inside the sandbox (it must be open) |
 | `c` / `g` | copy a file or folder into its `/workspace` / out of it, into the current folder |
@@ -421,7 +446,7 @@ opencode-sandbox open api                      # continue where you left off
 ### Commands
 
 ```
-opencode-sandbox new [DIR] [-n NAME] [-k KEY] [-p PROVIDER] [-- ARGS...]
+opencode-sandbox new [DIR] [-n NAME] [-k KEY] [-p PROVIDER] [OPTIONS] [-- ARGS...]
 ```
 
 | Option of `new` | |
@@ -430,11 +455,18 @@ opencode-sandbox new [DIR] [-n NAME] [-k KEY] [-p PROVIDER] [-- ARGS...]
 | `-n NAME` | sandbox name (default: folder name plus a random suffix) |
 | `-k KEY` | a key name from `~/.ssh`, `new` (disposable) or `none`; asked if omitted. Only `new` or `none` on [some platforms](#platforms) |
 | `-p PROVIDER` | provider id(s) from your opencode config, several as `a,b`; asked if omitted, automatic if you have only one |
+| `--network open\|none` | what it reaches: `open` (the default) or `none`, only its providers ([Network](#network)) |
+| `--engine docker\|apple` | where it runs (default: Apple container where that runs, else Docker) |
+| `--runtime NAME` | the Docker runtime it runs on, e.g. `runc` (default: gVisor where Docker has it; see [Isolation](#isolation)) |
+| `--gateway on\|off` | `on` (the default): its providers' API keys stay on your machine. `off`: they go into its config ([API keys](#api-keys)) |
 | `-- ARGS` | passed to opencode |
+
+The last four have defaults you can set in the [environment](#configuration);
+in the dashboard's form, `ctrl-o` asks them.
 
 | Command | |
 |---|---|
-| `ls` | list sandboxes: state, what they run in, key, providers, age, folder |
+| `ls` | list sandboxes: state, what they run in, network, key, providers, age, folder |
 | `open [NAME]` | reopen a sandbox and continue its last session (asks which if no NAME) |
 | `shell NAME` | bash inside an open sandbox |
 | `key NAME` | print the public key a sandbox uses |
@@ -544,9 +576,10 @@ In the sandbox:
 
 ## What it doesn't protect against
 
-- **Outbound network is open.** The sandbox has to reach your LLM provider and
-  your servers, so it can also reach the internet, your LAN, and services
-  listening on the host.
+- **Outbound network is open, unless you ask for none.** A sandbox that has to
+  reach your servers can also reach the internet, your LAN, services listening
+  on the host and, on a cloud machine, its metadata endpoint. `--network none`
+  closes all of that, and SSH and downloads with it ([Network](#network)).
 - **Anything inside an open sandbox can use its key**, and so log into every
   server that trusts it. With `ssh -A`, so can root on the host you forward to.
 - **Without a host agent, the disposable key can be copied out.** Whatever runs
@@ -578,9 +611,11 @@ In the sandbox:
 | `OPENCODE_SANDBOX_CONFIG` | opencode config to take providers from (default `~/.config/opencode/opencode.json`) |
 | `OPENCODE_SANDBOX_NO_AGENT` | `1` to use the no-agent mode ([Platforms](#platforms)) even where a host ssh-agent would work |
 | `OPENCODE_SANDBOX_GATEWAY` | `off` to give new sandboxes their providers' API keys instead of a gateway ([API keys](#api-keys)) |
+| `OPENCODE_SANDBOX_NETWORK` | `none` to give new sandboxes no network ([Network](#network)) |
 | `OPENCODE_SANDBOX_SEED_HOSTS` | space-separated hosts whose keys are copied from `~/.ssh/known_hosts` into sandboxes; read when `known_hosts` is created, delete it to re-seed |
 | `OPENCODE_SANDBOX_ENGINE` | `docker` or `apple`: where new sandboxes go (default: Apple container where it runs, else Docker) |
 | `OPENCODE_SANDBOX_RUNTIME` | a Docker runtime for new sandboxes, e.g. `runc` (default: gVisor where Docker has it, else Docker's own default; see [Isolation](#isolation)) |
+| `OPENCODE_SANDBOX_INTRO` | `off` to open the dashboard without its intro |
 | `OPENCODE_SANDBOX_DEBUG` | `1` to print every command opencode-sandbox runs |
 
 To use another opencode release, pass its version and archive checksums:
@@ -600,8 +635,6 @@ go build -o .bin/opencode-sandbox ./cmd/opencode-sandbox
 test/integration.sh .bin/opencode-sandbox          # against a real Docker
 ```
 
-To also check compatibility with the bash launcher, pass a checkout of v0.4.0:
-`git worktree add /tmp/v040 v0.4.0 && test/integration.sh .bin/opencode-sandbox /tmp/v040/opencode-sandbox`.
 CI runs all of this on every push.
 
 ## Releasing

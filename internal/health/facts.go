@@ -70,6 +70,9 @@ type Facts struct {
 	// a secret that goes into a sandbox all the same, and why.
 	Gateway    bool
 	KeysInside []KeyInside
+	// NoNetwork: new sandboxes get no network (OPENCODE_SANDBOX_NETWORK is
+	// none), and reach only their providers, through the gateway.
+	NoNetwork bool
 
 	MissingSSH []string // OpenSSH tools not on PATH
 	PidsLimit  int
@@ -166,7 +169,7 @@ func Gather(r run.Runner, docker, apple backend.Engine, version, image string) F
 		if f.Providers == 0 {
 			f.ConfigErr = "no providers"
 		}
-		_, inside := gateway.Routes(root, ids, gateway.Env{Getenv: os.Getenv, Dir: filepath.Dir(f.Config), Home: state.Home()})
+		_, inside := gateway.Routes(root, ids, gateway.Env{Getenv: os.Getenv, Dir: filepath.Dir(f.Config), Home: state.Home()}, false)
 		for _, id := range ids {
 			if why, ok := inside[id]; ok {
 				f.KeysInside = append(f.KeysInside, KeyInside{Provider: id, Why: why})
@@ -174,6 +177,7 @@ func Gather(r run.Runner, docker, apple backend.Engine, version, image string) F
 		}
 	}
 	f.Gateway = gateway.Wanted(os.Getenv(gateway.Switch))
+	f.NoNetwork = os.Getenv("OPENCODE_SANDBOX_NETWORK") == "none"
 
 	for _, tool := range []string{"ssh-keygen", "ssh-agent", "ssh-add"} {
 		if _, err := exec.LookPath(tool); err != nil {

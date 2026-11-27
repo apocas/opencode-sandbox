@@ -1,8 +1,7 @@
 // Package core does what opencode-sandbox does: it creates, opens, copies
 // into and out of, and deletes sandboxes, in whichever engines run here.
 // It asks nothing and prints nothing itself: the command line (package cli)
-// and the dashboard (package tui) decide, and show what it reports. Sandboxes
-// stay compatible with the bash launcher (0.1–0.4) and earlier Go versions.
+// and the dashboard (package tui) decide, and show what it reports.
 package core
 
 import (
@@ -14,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -30,7 +30,7 @@ import (
 
 // Version is this release; images are tagged with it, so after an update the
 // next run builds the matching image by itself.
-const Version = "0.9.2"
+const Version = "0.10.0"
 
 // pidsLimit is the most processes a sandbox may run.
 const pidsLimit = 1024
@@ -127,27 +127,138 @@ func (a *Core) Setup() error {
 		}
 		return errors.New(platform.NoEngine)
 	}
-	a.newE, a.newErr = nil, nil
-	name, err := platform.ChooseEngine(os.Getenv(platform.EngineEnv), a.engine("docker") != nil, a.engine("apple") != nil)
-	if err != nil {
-		a.newErr = err
-		return nil // other commands still work
-	}
-	a.newE = a.engine(name)
-	switch name {
-	case "docker":
-		rt, _ := platform.ChooseRuntime(runtime.GOOS, a.dockerInfo, os.Getenv(platform.RuntimeEnv))
-		a.plat = platform.Decide(a.dockerInfo, rt)
-		if err := platform.CheckRuntime(a.dockerInfo, a.plat.Runtime); err != nil {
-			a.newE, a.newErr = nil, err
-		}
-	case "apple":
-		a.plat = platform.Platform{NoAgentWhy: platform.AppleWhy}
-		if rt := os.Getenv(platform.RuntimeEnv); rt != "" {
-			a.newE, a.newErr = nil, fmt.Errorf("%s=%s chooses a Docker runtime, but new sandboxes go to Apple container; set %s=docker to use Docker", platform.RuntimeEnv, rt, platform.EngineEnv)
-		}
-	}
+	// Other commands still work where new sandboxes can't be made.
+	a.newE, a.plat, a.newErr = a.place("", "")
 	return nil
+}
+
+// place decides where a new sandbox runs: in the engine (docker or apple)
+// and, in Docker, on the runtime asked for. "" leaves each to the
+// environment (EngineEnv, RuntimeEnv), and that to what isolates best here.
+// The error is why a sandbox can't be made there.
+func (a *Core) place(engine, rt string) (backend.Engine, platform.Platform, error) {
+	// An error names what asked: the option, or else the variable.
+	engineBy, rtBy := "", ""
+	if engine != "" {
+		if engine != "docker" && engine != "apple" {
+			return nil, platform.Platform{}, fmt.Errorf("--engine must be docker or apple, not %q", engine)
+		}
+		engineBy = "--engine " + engine
+	} else {
+		engine = os.Getenv(platform.EngineEnv)
+	}
+	if rt != "" {
+		rtBy = "--runtime " + rt
+	} else {
+		rt = os.Getenv(platform.RuntimeEnv)
+	}
+	said := func(err error, env, v, by string) error {
+		if err == nil || by == "" {
+			return err
+		}
+		return errors.New(strings.Replace(err.Error(), env+"="+v, by, 1))
+	}
+	name, err := platform.ChooseEngine(engine, a.engine("docker") != nil, a.engine("apple") != nil)
+	if err != nil {
+		return nil, platform.Platform{}, said(err, platform.EngineEnv, engine, engineBy)
+	}
+	if name == "docker" {
+		chosen, _ := platform.ChooseRuntime(runtime.GOOS, a.dockerInfo, rt)
+		plat := platform.Decide(a.dockerInfo, chosen)
+		if err := platform.CheckRuntime(a.dockerInfo, plat.Runtime); err != nil {
+			return nil, plat, said(err, platform.RuntimeEnv, rt, rtBy)
+		}
+		return a.engine(name), plat, nil
+	}
+	plat := platform.Platform{NoAgentWhy: platform.AppleWhy}
+	switch {
+	case rt != "" && rtBy != "":
+		return nil, plat, fmt.Errorf("%s chooses a Docker runtime, but the sandbox would go to Apple container; add --engine docker", rtBy)
+	case rt != "":
+		return nil, plat, fmt.Errorf("%s=%s chooses a Docker runtime, but new sandboxes go to Apple container; set %s=docker to use Docker", platform.RuntimeEnv, rt, platform.EngineEnv)
+	}
+	return a.engine(name), plat, nil
+}
+
+// CheckPlace says why a new sandbox can't run in that engine and on that
+// runtime ("" for each leaves it to the environment, then to what's best
+// here); nil if it can.
+func (a *Core) CheckPlace(engine, rt string) error {
+	_, _, err := a.place(engine, rt)
+	return err
+}
+
+// Place is somewhere a new sandbox can run here.
+type Place struct {
+	// Engine and Runtime are what CreateOptions takes; both "" for wherever
+	// new sandboxes go by themselves.
+	Engine, Runtime string
+	Label, Detail   string
+}
+
+// Places lists where a new sandbox can run here: by itself first, then each
+// engine that's running and, in Docker, each kind of runtime it has.
+func (a *Core) Places() []Place {
+	isolation := func(e backend.Engine, plat platform.Platform) (string, string) {
+		if e.Name() == "apple" {
+			return "Apple container", "a VM of its own"
+		}
+		rt := plat.Runtime
+		if rt == "" {
+			rt = a.dockerInfo.DefaultRuntime
+		}
+		switch platform.Kind(a.dockerInfo, rt) {
+		case platform.Gvisor:
+			return "Docker with gVisor", "a kernel of its own (runtime " + rt + ")"
+		case platform.Kata:
+			return "Docker with Kata", "a VM of its own (runtime " + rt + ")"
+		}
+		if platform.InVM(a.dockerInfo) {
+			return "Docker", "a hardened container in the VM your containers share (runtime " + rt + ")"
+		}
+		return "Docker", "a hardened container on this machine's kernel (runtime " + rt + ")"
+	}
+	var out []Place
+	seen := map[string]bool{}
+	add := func(engine, rt string, auto bool) {
+		e, plat, err := a.place(engine, rt)
+		if err != nil {
+			return
+		}
+		label, detail := isolation(e, plat)
+		if auto {
+			out = append(out, Place{Label: "automatic", Detail: label + ": " + detail})
+			return
+		}
+		if !seen[label+detail] {
+			seen[label+detail] = true
+			out = append(out, Place{Engine: engine, Runtime: rt, Label: label, Detail: detail})
+		}
+	}
+	add("", "", true)
+	if a.engine("apple") != nil {
+		add("apple", "", false)
+	}
+	if a.engine("docker") != nil {
+		// One runtime of each kind: the one new sandboxes would get, then an
+		// ordinary one, then the others by name.
+		best, _ := platform.ChooseRuntime(runtime.GOOS, a.dockerInfo, "")
+		names := []string{best, a.dockerInfo.DefaultRuntime, "runc"}
+		var rest []string
+		for name := range a.dockerInfo.Runtimes {
+			rest = append(rest, name)
+		}
+		sort.Strings(rest)
+		kinds := map[string]bool{}
+		for _, name := range append(names, rest...) {
+			rt, ok := a.dockerInfo.Runtimes[name]
+			if k := platform.Kind(a.dockerInfo, name); name != "" && ok && !rt.Missing && !kinds[k] {
+				kinds[k] = true
+				add("docker", name, false)
+			}
+		}
+	}
+	return out
 }
 
 // Engine is a running engine as the user sees it.

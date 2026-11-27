@@ -49,8 +49,11 @@ type Sandbox struct {
 	Gateway bool
 	// APIKeysInside: its config has an API key (see Core.keysInside).
 	APIKeysInside bool
-	Source        string // the folder it was copied from
-	Version       string // the opencode-sandbox that created it ("" before 0.1)
+	// NoNetwork: it has no network, and reaches only its providers,
+	// through the gateway.
+	NoNetwork bool
+	Source    string // the folder it was copied from
+	Version   string // the opencode-sandbox that created it ("" before 0.1)
 }
 
 var (
@@ -106,7 +109,7 @@ func (a *Core) Sandboxes() ([]Sandbox, error) {
 			Name: r.Name, State: st, Status: status, Created: friendlyFix(r.Created),
 			Engine: r.Engine, RunsIn: a.runsIn(r),
 			KeyKind: r.KeyKind, Key: r.Key, KeyName: key[strings.LastIndexByte(key, '/')+1:],
-			KeyInside: r.KeyMode == "file", Providers: r.Providers, Gateway: r.Gateway != "", APIKeysInside: a.keysInside(r),
+			KeyInside: r.KeyMode == "file", Providers: r.Providers, Gateway: r.Gateway != "", APIKeysInside: a.keysInside(r), NoNetwork: r.Network == "none",
 			Source: r.Source, Version: r.Version,
 		}
 	}

@@ -160,6 +160,10 @@ func others(p *occonfig.Object) []string {
 	return found
 }
 
+// NoAddress is why the gateway can't serve a provider it doesn't know the
+// API of.
+const NoAddress = "your opencode config doesn't say where its API is (options.baseURL)"
+
 // notKept says which secrets of a provider the gateway doesn't keep.
 func notKept(found []string) string {
 	list := strings.Join(found[:min(len(found), 3)], ", ")
@@ -173,15 +177,17 @@ func notKept(found []string) string {
 // is and the secrets your config has for it. inside says, for a provider
 // with a secret that goes into its sandbox's config all the same, why: the
 // gateway can't serve it, or the secret isn't one it keeps. A provider can
-// be in both; one without secrets needs no gateway and is in neither.
-func Routes(root any, ids []string, env Env) (routes map[string]Route, inside map[string]string) {
+// be in both. One without secrets needs no gateway and is in neither, unless
+// all is set: a sandbox without a network reaches every provider through
+// the gateway, so each one whose API's address is known is served.
+func Routes(root any, ids []string, env Env, all bool) (routes map[string]Route, inside map[string]string) {
 	routes, inside = map[string]Route{}, map[string]string{}
 	top, _ := root.(*occonfig.Object)
 	if top == nil {
 		return
 	}
-	all, _ := top.Get("provider")
-	provs, _ := all.(*occonfig.Object)
+	ps, _ := top.Get("provider")
+	provs, _ := ps.(*occonfig.Object)
 	if provs == nil {
 		return
 	}
@@ -213,7 +219,8 @@ func Routes(root any, ids []string, env Env) (routes map[string]Route, inside ma
 			}
 		}
 		extra := others(p)
-		if r.Key == "" && len(r.Headers) == 0 {
+		keeps := r.Key != "" || len(r.Headers) > 0
+		if !keeps && !all {
 			if len(extra) > 0 {
 				inside[id] = notKept(extra)
 			}
@@ -230,13 +237,21 @@ func Routes(root any, ids []string, env Env) (routes map[string]Route, inside ma
 			}
 			base = apis[pkg]
 		}
-		if base == "" {
-			inside[id] = "your opencode config doesn't say where its API is (options.baseURL)"
-			continue
-		}
+		why := ""
 		u, err := url.Parse(base)
-		if err != nil || u.Host == "" || u.Scheme != "https" && u.Scheme != "http" {
-			inside[id] = fmt.Sprintf("its API's address (%s) isn't an http or https URL", base)
+		switch {
+		case base == "":
+			why = NoAddress
+		case err != nil || u.Host == "" || u.Scheme != "https" && u.Scheme != "http":
+			why = fmt.Sprintf("its API's address (%s) isn't an http or https URL", base)
+		}
+		if why != "" {
+			switch {
+			case keeps:
+				inside[id] = why
+			case len(extra) > 0:
+				inside[id] = notKept(extra)
+			}
 			continue
 		}
 		r.Base = u

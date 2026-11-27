@@ -196,6 +196,15 @@ func TestReport(t *testing.T) {
 		}, linux, true,
 			[]string{"Except a secret of p8, which goes into the sandbox: no address.",
 				"Except a secret of aws, which goes into the sandbox: the gateway keeps a provider's options.apiKey and options.headers, not its options.secretAccessKey."}, nil},
+		{"a network by default", nil, linux, true,
+			[]string{"network    open: the internet, your local network and services on this machine", "`opencode-sandbox new --network none` makes one that reaches only its"}, nil},
+		{"no network by default", func(f *Facts) { f.NoNetwork = true }, linux, true,
+			[]string{"network    none (OPENCODE_SANDBOX_NETWORK): a sandbox reaches only its providers", "No SSH, no downloads", "`opencode-sandbox new --network open` makes one that can.",
+				"ssh keys   none: without a network, a sandbox has nowhere to log in to"},
+			[]string{"open: the internet", "a key from ~/.ssh"}},
+		{"no network by default, in Apple container", func(f *Facts) {
+			f.AppleCLI, f.AppleVersion, f.AppleRunning, f.Engine, f.NoNetwork = true, "1.7.1", true, "apple", true
+		}, mac, true, []string{"network    none (OPENCODE_SANDBOX_NETWORK)"}, []string{"each has a network of its own"}},
 		{"the gateway switched off", func(f *Facts) { f.Gateway, f.KeysInside = false, []KeyInside{{"p9", "x"}} }, linux, true,
 			[]string{"api keys   only the chosen providers' keys, which can be read inside the sandbox (OPENCODE_SANDBOX_GATEWAY is off)"},
 			[]string{"stay on this machine", "Except"}},

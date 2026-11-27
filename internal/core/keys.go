@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/apocas/opencode-sandbox/internal/platform"
 	"github.com/apocas/opencode-sandbox/internal/run"
 	"github.com/apocas/opencode-sandbox/internal/sshagent"
 	"github.com/apocas/opencode-sandbox/internal/state"
@@ -42,18 +43,27 @@ type KeyChoice struct {
 
 // KeyChoices lists the SSH keys a new sandbox may get here, and why keys
 // from ~/.ssh aren't among them ("" when they are).
-func (a *Core) KeyChoices() ([]KeyChoice, string) {
+func (a *Core) KeyChoices() ([]KeyChoice, string) { return a.keyChoices(a.plat) }
+
+// KeyChoicesFor is KeyChoices for a sandbox in that engine and on that
+// runtime (see CreateOptions).
+func (a *Core) KeyChoicesFor(engine, rt string) ([]KeyChoice, string) {
+	_, plat, _ := a.place(engine, rt)
+	return a.keyChoices(plat)
+}
+
+func (a *Core) keyChoices(plat platform.Platform) ([]KeyChoice, string) {
 	var out []KeyChoice
 	why := ""
-	if a.plat.AgentOK {
+	if plat.AgentOK {
 		for _, k := range homeKeys() {
 			out = append(out, KeyChoice{Value: filepath.Base(k), Label: filepath.Base(k), Detail: sshagent.Describe(a.r, k+".pub")})
 		}
 	} else {
-		why = fmt.Sprintf("Keys from ~/.ssh aren't offered because %s: they would have to be copied into the sandbox. A new disposable key is stored inside it.", a.plat.NoAgentWhy)
+		why = fmt.Sprintf("Keys from ~/.ssh aren't offered because %s: they would have to be copied into the sandbox. A new disposable key is stored inside it.", plat.NoAgentWhy)
 	}
 	detail := "for this sandbox only: kept on this machine, deleted with it"
-	if !a.plat.AgentOK {
+	if !plat.AgentOK {
 		detail = "for this sandbox only: stored inside it, deleted with it"
 	}
 	return append(out,
@@ -70,8 +80,8 @@ func (a *Core) chooseKey(sb *sandbox, want string) error {
 	case "new":
 		sb.keyKind, sb.keyPath, sb.keyName = "disposable", state.DisposableKey(sb.name), "sandbox_key"
 	default:
-		if !a.plat.AgentOK {
-			return fmt.Errorf("keys from ~/.ssh can't be used here: %s, so the key would have to be copied into the sandbox, which opencode-sandbox never does; use -k new (a disposable key) or -k none", a.plat.NoAgentWhy)
+		if !sb.plat.AgentOK {
+			return fmt.Errorf("keys from ~/.ssh can't be used here: %s, so the key would have to be copied into the sandbox, which opencode-sandbox never does; use -k new (a disposable key) or -k none", sb.plat.NoAgentWhy)
 		}
 		if !strings.Contains(want, "/") {
 			want = state.Home() + "/.ssh/" + want
@@ -88,7 +98,7 @@ func (a *Core) chooseKey(sb *sandbox, want string) error {
 	switch {
 	case sb.keyKind == "none":
 		sb.keyMode = "none"
-	case sb.keyKind == "home" || a.plat.AgentOK:
+	case sb.keyKind == "home" || sb.plat.AgentOK:
 		sb.keyMode = "agent"
 	default:
 		sb.keyMode = "file"
@@ -169,7 +179,7 @@ func (a *Core) newKey(sb *sandbox) *NewKey {
 	k := &NewKey{Sandbox: sb.name, PublicKey: strings.TrimSpace(string(pub)), Dir: filepath.Dir(sb.keyPath),
 		Fingerprint: a.quietFingerprint(sb.keyPath + ".pub")}
 	if sb.keyMode == "file" {
-		k.Inside, k.Why = true, a.plat.NoAgentWhy
+		k.Inside, k.Why = true, sb.plat.NoAgentWhy
 	}
 	return k
 }

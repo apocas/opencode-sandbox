@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,6 +14,7 @@ import (
 	"charm.land/huh/v2"
 
 	"github.com/apocas/opencode-sandbox/internal/core"
+	"github.com/apocas/opencode-sandbox/internal/gateway"
 	"github.com/apocas/opencode-sandbox/internal/ui"
 )
 
@@ -21,6 +23,12 @@ type newForm struct {
 	folder, name, key string
 	providers         []string
 	defaults          map[string]string // a default name for each folder
+
+	// more: the options that have defaults are asked too (ctrl+o).
+	more bool
+	// network is "open" or "none", place where it runs (see placeOf), and
+	// gateway "on" or "off": what CreateOptions takes.
+	network, place, gateway string
 
 	mu   sync.Mutex
 	dots map[string]core.DotFiles // the dot files of each folder looked at
@@ -93,6 +101,12 @@ func (m *model) startForm() tea.Cmd {
 		keyOpts[i] = huh.NewOption(k.Label+"  "+m.t.Dim.Render(k.Detail), k.Value)
 	}
 	nf.key = "new"
+	// What new sandboxes get when nothing more is asked.
+	nf.network, _ = core.NetworkFor("")
+	nf.gateway = "on"
+	if !gateway.Wanted(os.Getenv(gateway.Switch)) {
+		nf.gateway = "off"
+	}
 	fields := []huh.Field{
 		huh.NewInput().Title("Folder to copy").
 			DescriptionFunc(func() string { return nf.about(c) }, &nf.folder).
@@ -136,10 +150,86 @@ func (m *model) startForm() tea.Cmd {
 	km.Input.Next = key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "next"))
 	km.MultiSelect.Toggle = key.NewBinding(key.WithKeys(km.MultiSelect.Toggle.Keys()...), key.WithHelp("space", "select"))
 	// The footer shows the keys (see formHints), not the form itself.
-	m.form = huh.NewForm(huh.NewGroup(fields...).Title("New sandbox")).
-		WithTheme(huh.ThemeFunc(huh.ThemeCharm)).WithKeyMap(km).WithShowHelp(false).WithWidth(min(max(m.w-8, 40), 90))
+	m.form = huh.NewForm(
+		huh.NewGroup(fields...).Title("New sandbox"),
+		huh.NewGroup(moreFields(m, nf)...).Title("New sandbox: more options").WithHideFunc(func() bool { return !nf.more }),
+	).WithTheme(huh.ThemeFunc(huh.ThemeCharm)).WithKeyMap(km).WithShowHelp(false).WithWidth(min(max(m.w-8, 40), 90))
 	m.mode = formMode
+	if nf.network == "none" {
+		m.say(info, "new sandboxes get no network (%s), so no SSH key whichever is picked; ctrl+o changes that", core.NetworkEnv)
+	}
 	return tea.Batch(m.form.Init(), m.sizeForm())
+}
+
+// options are what the form asks Create for, for a sandbox by that name.
+func (nf *newForm) options(name string) core.CreateOptions {
+	o := core.CreateOptions{Workspace: expand(nf.folder), Name: name, Key: nf.key, Providers: nf.providers,
+		Network: nf.network, Gateway: nf.gateway}
+	o.Engine, o.Runtime = placeOf(nf.place)
+	if o.Network == "none" {
+		o.Key = "none" // nowhere to log in to
+	}
+	return o
+}
+
+// placeOf takes a place's value in the form apart: the engine and runtime
+// CreateOptions takes.
+func placeOf(v string) (engine, rt string) {
+	engine, rt, _ = strings.Cut(v, "|")
+	return
+}
+
+// moreFields are the options that have defaults: what the sandbox can
+// reach, where it runs and where its providers' API keys are.
+func moreFields(m *model, nf *newForm) []huh.Field {
+	c, dim := m.c, m.t.Dim.Render
+	var places []huh.Option[string]
+	for _, p := range c.Places() {
+		places = append(places, huh.NewOption(p.Label+"  "+dim(p.Detail), p.Engine+"|"+p.Runtime))
+	}
+	if len(places) == 0 { // (a form opened where nothing runs sandboxes)
+		places = append(places, huh.NewOption("automatic", "|"))
+	}
+	nf.place = "|"
+	return []huh.Field{
+		huh.NewSelect[string]().Title("Network").
+			Description("what the sandbox can reach").
+			Options(
+				huh.NewOption("open  "+dim("the internet, your network and services on this machine"), "open"),
+				huh.NewOption("none  "+dim("only its providers, through the gateway: no SSH key, no downloads"), "none"),
+			).Value(&nf.network),
+		huh.NewSelect[string]().Title("Runs in").
+			Description("what isolates it").
+			Options(places...).Value(&nf.place).
+			Validate(func(v string) error {
+				engine, rt := placeOf(v)
+				if err := c.CheckPlace(engine, rt); err != nil {
+					return err
+				}
+				if nf.network == "none" || nf.key == "new" || nf.key == "none" {
+					return nil
+				}
+				choices, _ := c.KeyChoicesFor(engine, rt)
+				for _, k := range choices {
+					if k.Value == nf.key {
+						return nil
+					}
+				}
+				return fmt.Errorf("the SSH key picked before (%s) would have to be copied into a sandbox there; go back and pick a disposable key or none", nf.key)
+			}),
+		huh.NewSelect[string]().Title("API keys").
+			Description("where its providers' API keys are").
+			Options(
+				huh.NewOption("on this machine  "+dim("a gateway here puts them into its requests"), "on"),
+				huh.NewOption("inside the sandbox  "+dim("in its config, where the agent can read them"), "off"),
+			).Value(&nf.gateway).
+			Validate(func(v string) error {
+				if v == "off" && nf.network == "none" {
+					return errors.New("without a network, a sandbox reaches its providers through the gateway only")
+				}
+				return nil
+			}),
+	}
 }
 
 // sizeForm tells the form how much room it has, so it shows every field
@@ -217,6 +307,13 @@ func formHints(f *huh.Form) [][2]string {
 }
 
 func (m *model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// ctrl+o asks the options that have defaults too, after the last field.
+	if k, ok := msg.(tea.KeyPressMsg); ok && k.String() == "ctrl+o" && !m.nf.more {
+		m.nf.more = true
+		m.form.UpdateFieldPositions()
+		m.say(info, "more options follow the last field: network, where it runs, API keys")
+		return m, nil
+	}
 	// tab moves on from a text field with nothing to complete. Never from
 	// the last field: there, moving on would create the sandbox.
 	if k, ok := msg.(tea.KeyPressMsg); ok && k.String() == "tab" && !formUses(m.form, "tab") {
@@ -241,7 +338,7 @@ func (m *model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if name == "" {
 			name = nf.defaults[ws]
 		}
-		o := core.CreateOptions{Workspace: expand(nf.folder), Name: name, Key: nf.key, Providers: nf.providers}
+		o := nf.options(name)
 		m.prog = progress{title: "Creating sandbox '" + name + "' from " + ui.Tilde(ws)}
 		if d := nf.dotFiles(c, ws); len(d.Found) > 0 {
 			m.prog.notes = append(m.prog.notes, prefix(true)+"copying its dot files too: "+d.List(4))

@@ -70,6 +70,7 @@ func (d *Docker) Rows(label string) ([]backend.Row, error) {
 		l(label), l("opencode-sandbox.keykind"), l("opencode-sandbox.key"), "{{.Status}}", "{{.RunningFor}}",
 		l("opencode-sandbox.source"), l("opencode-sandbox.providers"), l("opencode-sandbox.keymode"),
 		l("opencode-sandbox.runtime"), l("opencode-sandbox.version"), l("opencode-sandbox.gateway"),
+		l("opencode-sandbox.network"),
 	}, "\t")
 	out, err := d.output("ps", "-a", "--filter", "label="+label, "--format", format)
 	if err != nil {
@@ -77,10 +78,10 @@ func (d *Docker) Rows(label string) ([]backend.Row, error) {
 	}
 	var rows []backend.Row
 	for _, line := range lines(out) {
-		f := append(strings.Split(line, "\t"), make([]string, 11)...)
+		f := append(strings.Split(line, "\t"), make([]string, 12)...)
 		rows = append(rows, backend.Row{
 			Name: f[0], KeyKind: f[1], Key: f[2], Status: f[3], Created: f[4],
-			Source: f[5], Providers: f[6], KeyMode: f[7], Runtime: f[8], Engine: "docker", Version: f[9], Gateway: f[10],
+			Source: f[5], Providers: f[6], KeyMode: f[7], Runtime: f[8], Engine: "docker", Version: f[9], Gateway: f[10], Network: f[11],
 		})
 	}
 	return rows, nil
@@ -155,7 +156,10 @@ func CreateArgs(s backend.Spec) []string {
 	for _, t := range s.Tmpfs {
 		a = append(a, "--tmpfs", t)
 	}
-	if s.Network != "" {
+	switch {
+	case s.NoNetwork:
+		a = append(a, "--network", "none")
+	case s.Network != "":
 		a = append(a, "--network", s.Network)
 	}
 	for _, e := range s.Env {

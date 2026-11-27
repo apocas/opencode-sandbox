@@ -198,7 +198,7 @@ func (a *Apple) Rows(label string) ([]backend.Row, error) {
 			Status:  status(c, now),
 			Created: HumanDuration(now.Sub(c.Configuration.CreationDate)) + " ago",
 			Source:  l("source"), Providers: l("providers"), KeyMode: l("keymode"), Runtime: l("runtime"),
-			Engine: "apple", Version: l("version"), Gateway: l("gateway"),
+			Engine: "apple", Version: l("version"), Gateway: l("gateway"), Network: l("network"),
 		}
 	}
 	return rows, nil
@@ -345,7 +345,12 @@ func (a *Apple) Create(s backend.Spec) error {
 	if s.Runtime != "" {
 		return fmt.Errorf("Apple container has no OCI runtimes to choose from (%s)", s.Runtime)
 	}
-	args, err := CreateArgs(s, s.Container)
+	// A network of its own, or none at all.
+	network := s.Container
+	if s.NoNetwork {
+		network = "none"
+	}
+	args, err := CreateArgs(s, network)
 	if err != nil {
 		return err
 	}
@@ -356,10 +361,12 @@ func (a *Apple) Create(s backend.Spec) error {
 		}
 	}()
 	a.removeParts(s.Container, s.Volumes) // left over from an earlier failure
-	if err := a.check("network", "create", "--label", NetworkFor+"="+s.Container, s.Container); err != nil {
-		return err
+	if !s.NoNetwork {
+		if err := a.check("network", "create", "--label", NetworkFor+"="+s.Container, s.Container); err != nil {
+			return err
+		}
 	}
-	helper := a.cmd("run", "--rm", "--progress", "none", "--user", "0", "--network", s.Container, "--entrypoint", "sh")
+	helper := a.cmd("run", "--rm", "--progress", "none", "--user", "0", "--network", network, "--entrypoint", "sh")
 	script := ""
 	for i, dst := range s.Volumes {
 		vol := volumeName(s.Container, dst)
@@ -420,7 +427,14 @@ func (a *Apple) Stop(c string, timeoutSec int) error {
 // helperArgs runs a short-lived container with c's volumes at their places,
 // as the image's user, to reach the files of a stopped container.
 func (a *Apple) helperArgs(ct *container, interactive bool, cmd ...string) []string {
-	args := a.cmd("run", "--rm", "--progress", "none", "--network", ct.ID)
+	// On the container's own network; none if it has none.
+	network := "none"
+	for _, n := range ct.Configuration.Networks {
+		if n.Network == ct.ID {
+			network = ct.ID
+		}
+	}
+	args := a.cmd("run", "--rm", "--progress", "none", "--network", network)
 	if interactive {
 		args = append(args, "-i")
 	}

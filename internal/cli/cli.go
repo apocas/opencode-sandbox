@@ -192,6 +192,14 @@ func (x *cli) newCmd(args []string) (int, error) {
 			o.Key, err = value("a key name, 'new' or 'none'")
 		case a == "-p":
 			prov, err = value("a provider name (or several: a,b)")
+		case a == "--network":
+			o.Network, err = value("open or none")
+		case a == "--engine":
+			o.Engine, err = value("docker or apple")
+		case a == "--runtime":
+			o.Runtime, err = value("the name of a Docker runtime")
+		case a == "--gateway":
+			o.Gateway, err = value("on or off")
 		case a == "--":
 			o.Args = args[i+1:]
 			i = len(args)
@@ -208,8 +216,15 @@ func (x *cli) newCmd(args []string) (int, error) {
 			return 0, err
 		}
 	}
-	if err := x.c.CanCreate(); err != nil {
+	if err := x.c.CheckPlace(o.Engine, o.Runtime); err != nil {
 		return 0, err
+	}
+	network, err := core.NetworkFor(o.Network)
+	if err != nil {
+		return 0, usageError{err.Error()}
+	}
+	if network == "none" && o.Key == "" {
+		o.Key = "none" // nowhere to log in to: no question to ask
 	}
 	ws, err := x.c.ResolveWorkspace(o.Workspace)
 	if err != nil {
@@ -226,7 +241,7 @@ func (x *cli) newCmd(args []string) (int, error) {
 		if !x.stdinTTY {
 			return 0, usagef("no terminal to ask which SSH key to use; pass -k NAME, -k new or -k none")
 		}
-		choices, why := x.c.KeyChoices()
+		choices, why := x.c.KeyChoicesFor(o.Engine, o.Runtime)
 		var opts []ui.Option
 		for _, k := range choices {
 			opts = append(opts, ui.Option{Value: k.Value, Label: k.Label, Detail: k.Detail})

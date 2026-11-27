@@ -141,9 +141,9 @@ func appleIsolation(p *printer, f Facts) {
 	p.section("How a new sandbox is isolated")
 	p.item("boundary", "a lightweight VM of its own (Apple container). A sandbox that breaks out of its container reaches only its own VM, which sees no more of this Mac than the folders mounted into it: its config and its disposable key.")
 	p.item("files", "a copy of your folder in /workspace, never the folder itself")
-	p.item("ssh keys", "only a disposable key or none, stored inside the sandbox, where anything running there can copy it: "+f.Agent.NoAgentWhy)
+	p.item("ssh keys", sshKeys(f, "only a disposable key or none, stored inside the sandbox, where anything running there can copy it: "+f.Agent.NoAgentWhy))
 	p.item("api keys", apiKeys(f))
-	p.item("network", "open: the internet, your local network and services on this Mac, but not other sandboxes (each has a network of its own)")
+	p.item("network", network(f, "open: the internet, your local network and services on this Mac, but not other sandboxes (each has a network of its own)"))
 	p.item("hardening", "non-root user, read-only root filesystem, no capabilities; the VM has 4 GB of memory and 4 CPUs. Apple container has no no-new-privileges or process limit; the VM stands in for them.")
 }
 
@@ -153,12 +153,12 @@ func isolation(p *printer, f Facts) {
 	p.item("boundary", boundary(f))
 	p.item("files", "a copy of your folder in /workspace, never the folder itself")
 	if f.Agent.AgentOK {
-		p.item("ssh keys", "a key from ~/.ssh or a disposable one stays on this machine: the sandbox uses it through its own ssh-agent and can't read or copy it")
+		p.item("ssh keys", sshKeys(f, "a key from ~/.ssh or a disposable one stays on this machine: the sandbox uses it through its own ssh-agent and can't read or copy it"))
 	} else {
-		p.item("ssh keys", "only a disposable key or none, stored inside the sandbox, where anything running there can copy it: "+f.Agent.NoAgentWhy)
+		p.item("ssh keys", sshKeys(f, "only a disposable key or none, stored inside the sandbox, where anything running there can copy it: "+f.Agent.NoAgentWhy))
 	}
 	p.item("api keys", apiKeys(f))
-	p.item("network", "open: the internet, your local network and services on this machine, but not other sandboxes")
+	p.item("network", network(f, "open: the internet, your local network and services on this machine, but not other sandboxes"))
 
 	h := "non-root user, read-only root filesystem, no capabilities, no-new-privileges"
 	for _, o := range f.Docker.SecurityOptions {
@@ -177,6 +177,23 @@ func isolation(p *printer, f Facts) {
 		h += "; no seccomp filter, as Docker's is switched off"
 	}
 	p.item("hardening", h)
+}
+
+// sshKeys says which SSH keys a new sandbox may get: none without a network.
+func sshKeys(f Facts, with string) string {
+	if f.NoNetwork {
+		return "none: without a network, a sandbox has nowhere to log in to"
+	}
+	return with
+}
+
+// network says what a new sandbox can reach: open, unless new sandboxes get
+// no network.
+func network(f Facts, open string) string {
+	if f.NoNetwork {
+		return "none (OPENCODE_SANDBOX_NETWORK): a sandbox reaches only its providers, through the gateway. No SSH, no downloads; `opencode-sandbox new --network open` makes one that can."
+	}
+	return open + ". `opencode-sandbox new --network none` makes one that reaches only its providers, through the gateway."
 }
 
 // apiKeys says where the API keys of a new sandbox's providers are.

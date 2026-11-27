@@ -15,6 +15,7 @@ import (
 	"github.com/apocas/opencode-sandbox/internal/backend"
 	"github.com/apocas/opencode-sandbox/internal/gateway"
 	"github.com/apocas/opencode-sandbox/internal/occonfig"
+	"github.com/apocas/opencode-sandbox/internal/platform"
 	"github.com/apocas/opencode-sandbox/internal/run"
 	"github.com/apocas/opencode-sandbox/internal/sshagent"
 	"github.com/apocas/opencode-sandbox/internal/state"
@@ -31,7 +32,12 @@ type sandbox struct {
 	providers                          string // comma-separated
 	// gateway: its providers' API keys stay on this machine (see package
 	// gateway).
-	gateway             bool
+	gateway bool
+	// network is "open" or "none" (see CreateOptions).
+	network string
+	// e and plat are where it runs, and what follows from that.
+	e                   backend.Engine
+	plat                platform.Platform
 	keyCreated, created bool
 }
 
@@ -45,6 +51,52 @@ type CreateOptions struct {
 	Key       string   // a key pair in ~/.ssh (name or path), "new" or "none"
 	Providers []string // provider ids; none for the only one configured
 	Args      []string // passed to opencode
+
+	// Where it runs: Engine is "docker" or "apple", Runtime a Docker
+	// runtime. "" leaves each to the environment (OPENCODE_SANDBOX_ENGINE,
+	// OPENCODE_SANDBOX_RUNTIME), and that to what isolates best here.
+	Engine, Runtime string
+	// Network is "open" (the internet, your network, this machine's
+	// services) or "none" (nothing but its providers, through the gateway;
+	// so no SSH either). "" leaves it to NetworkEnv, then open.
+	Network string
+	// Gateway is "on" (its providers' API keys stay on this machine) or
+	// "off" (they go into its config). "" leaves it to the environment
+	// (OPENCODE_SANDBOX_GATEWAY), then on.
+	Gateway string
+}
+
+// NetworkEnv set to "none" gives new sandboxes no network.
+const NetworkEnv = "OPENCODE_SANDBOX_NETWORK"
+
+// NetworkFor is the network a new sandbox gets, "open" or "none", given
+// what was asked for ("" to leave it to NetworkEnv).
+func NetworkFor(want string) (string, error) {
+	by := "--network"
+	if want == "" {
+		want, by = os.Getenv(NetworkEnv), NetworkEnv
+	}
+	switch want {
+	case "", "open":
+		return "open", nil
+	case "none":
+		return "none", nil
+	}
+	return "", fmt.Errorf("%s must be open or none, not %q", by, want)
+}
+
+// gatewayFor says whether a new sandbox gets a gateway, given what was
+// asked for ("" to leave it to the environment).
+func gatewayFor(want string) (bool, error) {
+	switch want {
+	case "":
+		return gatewayWanted(), nil
+	case "on":
+		return true, nil
+	case "off":
+		return false, nil
+	}
+	return false, fmt.Errorf("--gateway must be on or off, not %q", want)
 }
 
 // Created is what Create made.
@@ -57,10 +109,29 @@ type Created struct {
 // Create makes a new sandbox without opening it. If it fails, nothing of it
 // is left behind.
 func (a *Core) Create(o CreateOptions) (*Created, error) {
-	if err := a.CanCreate(); err != nil {
+	e, plat, err := a.place(o.Engine, o.Runtime)
+	if err != nil {
 		return nil, err
 	}
-	e := a.newE
+	network, err := NetworkFor(o.Network)
+	if err != nil {
+		return nil, err
+	}
+	gw, err := gatewayFor(o.Gateway)
+	if err != nil {
+		return nil, err
+	}
+	if network == "none" {
+		// Its providers are all it reaches, and only through the gateway.
+		switch {
+		case !gw:
+			return nil, errors.New("a sandbox without a network reaches its providers through the gateway only, so it can't be made with the gateway off")
+		case o.Key == "":
+			o.Key = "none"
+		case o.Key != "none":
+			return nil, errors.New("a sandbox without a network has nowhere to log in to, so it gets no SSH key; leave -k out")
+		}
+	}
 	workspace, err := a.ResolveWorkspace(o.Workspace)
 	if err != nil {
 		return nil, err
@@ -72,7 +143,7 @@ func (a *Core) Create(o CreateOptions) (*Created, error) {
 	if err := a.CheckName(name); err != nil {
 		return nil, err
 	}
-	sb := &sandbox{name: name, workspace: workspace, gateway: gatewayWanted()}
+	sb := &sandbox{name: name, workspace: workspace, gateway: gw, network: network, e: e, plat: plat}
 	if o.Key == "" {
 		return nil, errors.New("no SSH key chosen; pass -k NAME, -k new or -k none")
 	}
@@ -81,6 +152,19 @@ func (a *Core) Create(o CreateOptions) (*Created, error) {
 	}
 	if err := a.chooseProviders(sb, strings.Join(o.Providers, ",")); err != nil {
 		return nil, err
+	}
+	if network == "none" {
+		ids := splitList(sb.providers)
+		routes, inside := gateway.Routes(a.config(), ids, gatewayEnv(), true)
+		for _, id := range ids {
+			if _, ok := routes[id]; !ok {
+				why := inside[id]
+				if why == "" {
+					why = gateway.NoAddress
+				}
+				return nil, fmt.Errorf("provider '%s' can't be reached from a sandbox without a network: the gateway can't serve it, because %s", id, why)
+			}
+		}
 	}
 	defer a.Rep.Done()
 	if err := a.prepare(e); err != nil {
@@ -93,7 +177,7 @@ func (a *Core) Create(o CreateOptions) (*Created, error) {
 		}
 	}()
 	a.Rep.Step(fmt.Sprintf("Creating sandbox '%s'", name))
-	if err := a.writeConfig(e, name, sb.providers, sb.gateway); err != nil {
+	if err := a.writeConfig(e, name, sb.providers, sb.gateway, network == "none"); err != nil {
 		return nil, err
 	}
 	if sb.keyKind == "disposable" {
@@ -231,7 +315,9 @@ func tsv(s string) string {
 // of yours, with a gateway in the place of its providers' API keys where the
 // sandbox has one. It lives in the runtime dir (RAM, user-only) and is
 // regenerated on every start, so changes to your config reach the sandbox.
-func (a *Core) writeConfig(e backend.Engine, name, providers string, gw bool) error {
+// all: the sandbox has no network, so every provider goes through the
+// gateway, with or without secrets to keep.
+func (a *Core) writeConfig(e backend.Engine, name, providers string, gw, all bool) error {
 	cfg := state.Config()
 	root, _ := occonfig.Load(cfg)
 	ids := occonfig.ProviderIDs(root)
@@ -254,7 +340,7 @@ func (a *Core) writeConfig(e backend.Engine, name, providers string, gw bool) er
 		return err
 	}
 	if gw {
-		if err := a.throughGateway(name, root, filtered, have); err != nil {
+		if err := a.throughGateway(name, root, filtered, have, all); err != nil {
 			return err
 		}
 	}
@@ -353,7 +439,8 @@ func (a *Core) createContainer(e backend.Engine, sb *sandbox, opencodeArgs []str
 			{state.Label("keymode"), sb.keyMode},
 			{state.Label("providers"), sb.providers},
 			{state.Label("version"), Version},
-			{state.Label("runtime"), a.runtime()},
+			{state.Label("runtime"), a.runtimeOf(e, sb.plat)},
+			{state.Label("network"), sb.network},
 		},
 		// Hardening: immutable rootfs, no capabilities, no privilege
 		// escalation, and only the variables below. Your host SSH_AUTH_SOCK
@@ -361,8 +448,8 @@ func (a *Core) createContainer(e backend.Engine, sb *sandbox, opencodeArgs []str
 		// native .so there and loads it.
 		Init: true, ReadOnlyRoot: true, DropAllCaps: true, NoNewPrivileges: true, PidsLimit: pidsLimit,
 		Tmpfs:   []string{"/tmp:exec,size=1g,mode=1777"},
-		Network: state.Network,
-		Runtime: a.plat.Runtime,
+		Network: state.Network, NoNetwork: sb.network == "none",
+		Runtime: sb.plat.Runtime,
 		Env:     [][2]string{{"TERM", term}, {"COLORTERM", os.Getenv("COLORTERM")}},
 		Volumes: []string{"/home/agent", "/workspace"},
 		Binds: []backend.Bind{
@@ -440,12 +527,16 @@ func writeSandboxDir(name string, config []byte) error {
 }
 
 // runtime is the OCI runtime new sandboxes run in; "" outside Docker.
-func (a *Core) runtime() string {
+func (a *Core) runtime() string { return a.runtimeOf(a.newE, a.plat) }
+
+// runtimeOf is the OCI runtime a sandbox placed in e runs in; "" outside
+// Docker.
+func (a *Core) runtimeOf(e backend.Engine, plat platform.Platform) string {
 	switch {
-	case a.newE == nil || a.newE.Name() != "docker":
+	case e == nil || e.Name() != "docker":
 		return ""
-	case a.plat.Runtime != "":
-		return a.plat.Runtime
+	case plat.Runtime != "":
+		return plat.Runtime
 	}
 	return a.dockerInfo.DefaultRuntime
 }

@@ -28,8 +28,7 @@ jobs:
           "$RUNNER_TEMP/bin/opencode-sandbox" version
 
   # Every command against a real Docker (rootful, so the host ssh-agent mode
-  # is used), and against sandboxes made by the bash launcher of v0.4.0; then
-  # after `opencode-sandbox setup` has installed gVisor: on the runtime new
+  # is used); then after `opencode-sandbox setup` has installed gVisor: on the runtime new
   # sandboxes get by themselves (host ssh-agent), and on the one without host
   # sockets, asked for (disposable keys inside).
   integration:
@@ -48,8 +47,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -62,8 +59,7 @@ jobs:
           docker info --format '{{json .Runtimes}}'
           .bin/opencode-sandbox setup | grep 'nothing to set up'
           .bin/opencode-sandbox health | grep 'boundary   gVisor (runtime runsc-ssh, used because Docker has it)'
-      - run: git worktree add /tmp/v040 v0.4.0
-      - run: test/integration.sh .bin/opencode-sandbox ${{ matrix.name == 'docker' && '/tmp/v040/opencode-sandbox' || '' }}
+      - run: test/integration.sh .bin/opencode-sandbox
         env:
           OPENCODE_SANDBOX_RUNTIME: ${{ matrix.runtime }}
           EXPECT_RUNTIME: ${{ matrix.expect }}

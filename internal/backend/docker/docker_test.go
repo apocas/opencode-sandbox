@@ -67,3 +67,11 @@ func TestParseInfo(t *testing.T) {
 		t.Error("docker info without a daemon was accepted")
 	}
 }
+
+// A sandbox without a network is on none, whatever network it names.
+func TestCreateArgsNoNetwork(t *testing.T) {
+	got := strings.Join(CreateArgs(backend.Spec{Container: "c", Network: "opencode-sandbox-net", NoNetwork: true, Image: "i"}), " ")
+	if got != "docker create -i --name c --network none i" {
+		t.Errorf("got %q", got)
+	}
+}

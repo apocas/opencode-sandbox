@@ -54,6 +54,8 @@ const (
 // then shows the health report, with what to install.
 func Run(c *core.Core, t *ui.Theme, setupErr error) int {
 	m := newModel(c, t, setupErr)
+	// Where there's something to say first (no engine), it isn't kept waiting.
+	m.intro = setupErr == nil && introWanted()
 	prevRep, prevStderr := c.Rep, run.Stderr
 	c.Rep = newReporter(m.ev)
 	run.Stderr = &lines{emit: func(l string) { m.ev <- noteMsg{text: l, warn: true} }}
@@ -94,6 +96,10 @@ type model struct {
 
 	showHelp  bool
 	quitArmed bool // ctrl+c was pressed once in the list
+
+	// intro: the intro is playing, at introFrame (see intro.go).
+	intro      bool
+	introFrame int
 
 	form *huh.Form
 	nf   *newForm
@@ -181,6 +187,9 @@ type (
 
 func (m *model) Init() tea.Cmd {
 	cmds := []tea.Cmd{listen(m.ev), m.spin.Tick, tea.RequestBackgroundColor}
+	if m.intro {
+		cmds = append(cmds, introNext())
+	}
 	if m.setupErr != nil {
 		cmds = append(cmds, m.loadHealth())
 	} else {
@@ -248,6 +257,32 @@ func (m *model) say(k kind, format string, args ...any) {
 // --- update ------------------------------------------------------------------
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// The intro plays over the dashboard, which loads meanwhile: its frames
+	// are the intro's, a key ends it, the rest is the dashboard's.
+	switch msg := msg.(type) {
+	case introMsg:
+		if !m.intro {
+			return m, nil
+		}
+		if m.introFrame++; m.introFrame >= introFrames {
+			m.intro = false
+			return m, nil
+		}
+		return m, introNext()
+	case tea.KeyPressMsg:
+		if m.intro {
+			m.intro = false
+			switch msg.String() {
+			case "enter", "space", "esc":
+				return m, nil // the keys one skips things with do no more
+			}
+			// Any other also does its job: n typed at once opens the form.
+		}
+	case tea.WindowSizeMsg:
+		if msg.Width < introW || msg.Height < introH {
+			m.intro = false // no room for it
+		}
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height

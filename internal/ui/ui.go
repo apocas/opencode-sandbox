@@ -138,6 +138,22 @@ func APIKeys(s core.Sandbox) string {
 	return "inside the sandbox (it has no gateway)"
 }
 
+// Network is a sandbox's network as listed: open or none.
+func Network(s core.Sandbox) string {
+	if s.NoNetwork {
+		return "none"
+	}
+	return "open"
+}
+
+// NetworkWords says in words what a sandbox can reach.
+func NetworkWords(s core.Sandbox) string {
+	if s.NoNetwork {
+		return "none: it reaches only its providers, through the gateway"
+	}
+	return "open: the internet, your network and services on this machine"
+}
+
 // RunsIn says in words what a sandbox runs in.
 func RunsIn(s core.Sandbox) string {
 	switch s.RunsIn {
@@ -165,7 +181,7 @@ func (t *Theme) Table(ss []core.Sandbox) string {
 	tb := table.New().
 		Border(lipgloss.HiddenBorder()).BorderTop(false).BorderBottom(false).BorderLeft(false).BorderRight(false).
 		BorderHeader(false).BorderColumn(false).
-		Headers("", "NAME", "STATE", "RUNS IN", "SSH KEY", "PROVIDER", "CREATED", "COPIED FROM").
+		Headers("", "NAME", "STATE", "RUNS IN", "NETWORK", "SSH KEY", "PROVIDER", "CREATED", "COPIED FROM").
 		StyleFunc(func(row, col int) lipgloss.Style {
 			s := lipgloss.NewStyle().PaddingRight(2)
 			if col == 0 {
@@ -177,7 +193,7 @@ func (t *Theme) Table(ss []core.Sandbox) string {
 			return s
 		})
 	for _, s := range ss {
-		tb.Row(t.Badge(s), t.Bold.Render(s.Name), t.StatusStyled(s), s.RunsIn, KeyName(s), Providers(s),
+		tb.Row(t.Badge(s), t.Bold.Render(s.Name), t.StatusStyled(s), s.RunsIn, Network(s), KeyName(s), Providers(s),
 			t.Dim.Render(s.Created), t.Dim.Render(Tilde(s.Source)))
 	}
 	return strings.TrimRight(tb.Render(), "\n ")

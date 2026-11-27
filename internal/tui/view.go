@@ -35,6 +35,9 @@ func (m *model) render() string {
 	if m.w == 0 {
 		return ""
 	}
+	if m.intro {
+		return m.introView(m.introFrame, m.w, m.h)
+	}
 	header := m.header()
 	footer := m.footer()
 	status := m.statusLine()
@@ -134,6 +137,9 @@ func (m *model) footer() string {
 	case formMode:
 		for _, h := range formHints(m.form) {
 			items = append(items, k(h[0], h[1]))
+		}
+		if m.nf != nil && !m.nf.more {
+			items = append(items, k("ctrl+o", "more options"))
 		}
 	case progressMode:
 		if m.prog.finished {
@@ -305,6 +311,7 @@ func (m *model) details(w int) string {
 	}
 	row("state", t.StatusStyled(*s))
 	row("runs in", ui.RunsIn(*s))
+	row("network", ui.NetworkWords(*s))
 	row("copied from", ui.Tilde(s.Source))
 	provs := s.Providers
 	if provs == "" {

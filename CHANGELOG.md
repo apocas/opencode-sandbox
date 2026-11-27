@@ -4,6 +4,37 @@ All notable changes to opencode-sandbox. Versions follow
 [Semantic Versioning](https://semver.org); each release is tagged `vX.Y.Z`.
 To update, see [Updating](README.md#updating).
 
+## [0.10.0] - 2026-11-27
+
+### Added
+
+- **A sandbox can have no network.** `opencode-sandbox new --network none`
+  makes one with only its own loopback interface: it reaches nothing but its
+  providers, through the gateway, which doesn't travel over a network. Not
+  the internet, your network, your machine's services or a cloud's metadata
+  endpoint; so no SSH key, no `git pull` and no package installs either. Every
+  provider of such a sandbox goes through the gateway, those without an API
+  key too. `OPENCODE_SANDBOX_NETWORK=none` makes it the default. See
+  [Network](README.md#network).
+- `new` takes `--engine docker|apple`, `--runtime NAME` and `--gateway on|off`
+  for one sandbox, where before only the environment could say
+  (`OPENCODE_SANDBOX_ENGINE`, `_RUNTIME`, `_GATEWAY`, which stay as defaults).
+- The dashboard's new-sandbox form asks these too: `ctrl-o` adds a page with
+  the network, where the sandbox runs (each engine running here and, in
+  Docker, each kind of runtime) and where its API keys are.
+- `ls` has a NETWORK column, the dashboard shows a sandbox's network, and
+  `health` says what a new sandbox reaches.
+- The dashboard opens with a short intro: the name is written while a wall
+  goes up around it and closes. It lasts a little over a second, any key ends
+  it, and `OPENCODE_SANDBOX_INTRO=off` turns it off. It isn't shown on a
+  terminal too small for it, nor when there's no engine to run sandboxes in.
+
+### Changed
+
+- `ls`: the NETWORK column comes after RUNS IN; a script that reads columns
+  by position needs a look.
+- Compatibility with the bash launcher of 0.4 and earlier is no longer
+  tested: sandboxes made by it aren't promised to keep working.
 ## [0.9.2] - 2026-11-27
 
 ### Fixed
@@ -319,6 +350,7 @@ First release.
   `--resume` warns about sandboxes created by an older version.
 - Bundles opencode 2.4.2 (x86_64 and arm64 builds, checksums verified).
 
+[0.10.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.10.0
 [0.9.2]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.9.2
 [0.9.1]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.9.1
 [0.9.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.9.0

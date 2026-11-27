@@ -50,7 +50,7 @@ func (a *Core) keysInside(r backend.Row) bool {
 	if r.Providers == "" {
 		return true // from before provider selection: it has them all
 	}
-	routes, inside := gateway.Routes(a.config(), splitList(r.Providers), gatewayEnv())
+	routes, inside := gateway.Routes(a.config(), splitList(r.Providers), gatewayEnv(), false)
 	if r.Gateway != "" {
 		return len(inside) > 0
 	}
@@ -64,6 +64,9 @@ type gatewayState struct {
 	Token string `json:"token"`
 	// Providers are the sandbox's.
 	Providers []string `json:"providers"`
+	// All: the sandbox has no network, so the gateway serves each of them
+	// whose API's address is known, not only those with secrets to keep.
+	All bool `json:"all,omitempty"`
 }
 
 func gatewayStateFile(name string) string { return filepath.Join(state.GatewayDir(name), "state.json") }
@@ -76,13 +79,13 @@ func gatewayEnv() gateway.Env {
 // throughGateway changes a sandbox's config so that its providers' secrets
 // stay here, and leaves the gateway what it needs to put them back. A new
 // token every time: the one of an earlier start is worth nothing.
-func (a *Core) throughGateway(name string, root any, cfg *occonfig.Object, providers []string) error {
+func (a *Core) throughGateway(name string, root any, cfg *occonfig.Object, providers []string, all bool) error {
 	b := make([]byte, 24)
 	if _, err := rand.Read(b); err != nil {
 		return err
 	}
-	st := gatewayState{Token: "opencode-sandbox-" + hex.EncodeToString(b), Providers: providers}
-	routes, inside := gateway.Routes(root, providers, gatewayEnv())
+	st := gatewayState{Token: "opencode-sandbox-" + hex.EncodeToString(b), Providers: providers, All: all}
+	routes, inside := gateway.Routes(root, providers, gatewayEnv(), all)
 	gateway.Rewrite(cfg, routes, st.Token)
 	for _, id := range providers {
 		if why, ok := inside[id]; ok {
@@ -281,7 +284,7 @@ func (g *gatewaySource) load() {
 		if err != nil {
 			g.logf("can't read %s: %v", state.Config(), err)
 		}
-		routes, inside := gateway.Routes(root, g.st.Providers, gatewayEnv())
+		routes, inside := gateway.Routes(root, g.st.Providers, gatewayEnv(), g.st.All)
 		for id, why := range inside {
 			g.logf("provider '%s' has a secret in the sandbox: %s", id, why)
 		}

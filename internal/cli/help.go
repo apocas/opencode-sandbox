@@ -23,7 +23,7 @@ func termWidth() int {
 type command struct{ name, args, short, long string }
 
 var commands = []command{
-	{"new", "[DIR] [-n NAME] [-k KEY] [-p PROVIDER] [-- ARGS]", "create a sandbox with a copy of DIR and open it", `
+	{"new", "[DIR] [-n NAME] [-k KEY] [-p PROVIDER] [OPTIONS] [-- ARGS]", "create a sandbox with a copy of DIR and open it", `
 Creates a NEW sandbox with a copy of DIR (default: the current folder) in
 /workspace, and opens opencode in it. DIR is copied, never mounted, so nothing
 the agent does reaches it. Your home folder, ~/.ssh and opencode-sandbox's own
@@ -47,7 +47,24 @@ copied like the rest: they're named first, and on a terminal you're asked.
                those providers; opencode's built-in providers are switched
                off. Their API keys stay on this machine: opencode reaches
                each provider through a gateway that puts its key in.
-  -- ARGS      pass the remaining arguments to opencode`},
+  --network open|none
+               open (the default): the internet, your network and services on
+               this machine. none: no network at all; the sandbox reaches only
+               its providers, through the gateway, so it gets no SSH key and
+               can't download anything.
+  --engine docker|apple
+               where it runs (default: Apple container where that runs, else
+               Docker)
+  --runtime NAME
+               the Docker runtime it runs on, e.g. runc (default: gVisor where
+               Docker has it)
+  --gateway on|off
+               on (the default): its providers' API keys stay on this machine.
+               off: they go into its config.
+  -- ARGS      pass the remaining arguments to opencode
+
+The defaults of the last four can be set in the environment (see
+opencode-sandbox help): OPENCODE_SANDBOX_NETWORK, _ENGINE, _RUNTIME, _GATEWAY.`},
 	{"ls", "", "list sandboxes", `
 Lists sandboxes: their state, what isolates them (docker, gvisor or apple),
 their SSH key (* when its private part is stored inside), providers (* when
@@ -156,9 +173,12 @@ the dashboard: your sandboxes, and keys to create, open, copy and delete them.
                                ssh-agent would work
   OPENCODE_SANDBOX_GATEWAY     off: give new sandboxes their providers' API
                                keys, instead of a gateway that keeps them here
+  OPENCODE_SANDBOX_NETWORK     none: give new sandboxes no network; they reach
+                               only their providers, through the gateway
   OPENCODE_SANDBOX_SEED_HOSTS  hosts whose keys are copied from your
                                ~/.ssh/known_hosts into sandboxes, so the first
                                hop is verified; e.g. "[jump.example.com]:2222"
+  OPENCODE_SANDBOX_INTRO       off: open the dashboard without its intro
   OPENCODE_SANDBOX_DEBUG       1: print every command run
 
 ` + h("Inside a sandbox:") + `

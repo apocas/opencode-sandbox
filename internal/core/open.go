@@ -68,8 +68,12 @@ func (a *Core) Prepare(name string) error {
 		if err != nil {
 			return err
 		}
+		network, err := label("network")
+		if err != nil {
+			return err
+		}
 		if provs != "" {
-			if err := a.writeConfig(e, name, provs, gw != ""); err != nil {
+			if err := a.writeConfig(e, name, provs, gw != "", network == "none"); err != nil {
 				return err
 			}
 		} else {

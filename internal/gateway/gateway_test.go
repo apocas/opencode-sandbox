@@ -493,7 +493,7 @@ func TestRoutes(t *testing.T) {
 		"pointers":  {"options":{"baseURL":"https://x.example","apiKey":"k","keyFile":"/k.json","apiKeyEnv":"MY_KEY","accessKeyId":"AKIA","tokenUrl":"https://t.example","publicKey":"pk","maxTokens":5,"secretAccessKey":"{env:AWS_SECRET}","empty_token":""}}
 	}}`)
 	ids := []string{"plain", "env", "unset", "file", "home", "headers", "api", "anthropic", "mine", "unknown", "nowhere", "badurl", "relative", "keyless", "odd", "oddopts", "missing", "aws", "both", "models", "pointers"}
-	routes, skipped := Routes(root, ids, env)
+	routes, skipped := Routes(root, ids, env, false)
 
 	want := map[string]struct{ base, key string }{
 		"plain":     {"https://one.example/v1", "k1"},
@@ -545,8 +545,52 @@ func TestRoutes(t *testing.T) {
 	if len(skipped) != 7 {
 		t.Errorf("secrets inside: %v", skipped)
 	}
-	if r, s := Routes(parse(t, `[1]`), ids, env); len(r)+len(s) != 0 {
+	if r, s := Routes(parse(t, `[1]`), ids, env, false); len(r)+len(s) != 0 {
 		t.Errorf("a config that isn't an object: %v %v", r, s)
+	}
+}
+
+// A sandbox without a network reaches every provider through the gateway:
+// one without secrets is served too, as long as its API's address is known.
+func TestRoutesForNoNetwork(t *testing.T) {
+	root := parse(t, `{"provider":{
+		"keyed":   {"options":{"baseURL":"https://one.example/v1","apiKey":"SECRET"}},
+		"keyless": {"options":{"baseURL":"http://localhost:11434/v1"}},
+		"builtin": {"npm":"@ai-sdk/anthropic"},
+		"nowhere": {"models":{"m":{}}},
+		"aws":     {"options":{"secretAccessKey":"S"}}}}`)
+	ids := []string{"keyed", "keyless", "builtin", "nowhere", "aws"}
+	routes, inside := Routes(root, ids, Env{}, true)
+	for id, base := range map[string]string{"keyed": "https://one.example/v1", "keyless": "http://localhost:11434/v1", "builtin": "https://api.anthropic.com/v1"} {
+		if r, ok := routes[id]; !ok || r.Base.String() != base {
+			t.Errorf("%s: served %v at %v, want %s", id, ok, r.Base, base)
+		}
+	}
+	if len(routes) != 3 || routes["keyless"].Key != "" || routes["keyed"].Key != "SECRET" {
+		t.Errorf("routes: %v", routes)
+	}
+	// Not served: no address. Only one of them has a secret to speak of.
+	if len(inside) != 1 || !strings.Contains(inside["aws"], "options.secretAccessKey") {
+		t.Errorf("secrets inside: %v", inside)
+	}
+	// Its config points each at the gateway; one without a key gets none.
+	cfg, err := occonfig.Filter(root, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	Rewrite(cfg, routes, token)
+	got := string(occonfig.Encode(cfg))
+	for _, want := range []string{`"baseURL": "http://127.0.0.1:17872/keyed"`, `"baseURL": "http://127.0.0.1:17872/keyless"`, `"baseURL": "http://127.0.0.1:17872/builtin"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the sandbox's config lacks %s:\n%s", want, got)
+		}
+	}
+	if strings.Count(got, token) != 1 || strings.Contains(got, "localhost:11434") {
+		t.Errorf("the sandbox's config:\n%s", got)
+	}
+	// With a network, the ones without secrets are left alone.
+	if routes, _ := Routes(root, ids, Env{}, false); len(routes) != 1 {
+		t.Errorf("with a network: %v", routes)
 	}
 }
 
@@ -561,7 +605,7 @@ func TestRewrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	routes, _ := Routes(root, ids, Env{})
+	routes, _ := Routes(root, ids, Env{}, false)
 	Rewrite(cfg, routes, token)
 	got := string(occonfig.Encode(cfg))
 	for _, secret := range []string{"SECRET-A", "SECRET-T", "SECRET-B", "one.example", "b.example"} {
