@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/apocas/opencode-sandbox/internal/gateway"
 	"github.com/apocas/opencode-sandbox/internal/platform"
 )
 
@@ -141,7 +142,7 @@ func appleIsolation(p *printer, f Facts) {
 	p.item("boundary", "a lightweight VM of its own (Apple container). A sandbox that breaks out of its container reaches only its own VM, which sees no more of this Mac than the folders mounted into it: its config and its disposable key.")
 	p.item("files", "a copy of your folder in /workspace, never the folder itself")
 	p.item("ssh keys", "only a disposable key or none, stored inside the sandbox, where anything running there can copy it: "+f.Agent.NoAgentWhy)
-	p.item("api keys", "only the chosen providers' keys, which can be read inside the sandbox")
+	p.item("api keys", apiKeys(f))
 	p.item("network", "open: the internet, your local network and services on this Mac, but not other sandboxes (each has a network of its own)")
 	p.item("hardening", "non-root user, read-only root filesystem, no capabilities; the VM has 4 GB of memory and 4 CPUs. Apple container has no no-new-privileges or process limit; the VM stands in for them.")
 }
@@ -156,7 +157,7 @@ func isolation(p *printer, f Facts) {
 	} else {
 		p.item("ssh keys", "only a disposable key or none, stored inside the sandbox, where anything running there can copy it: "+f.Agent.NoAgentWhy)
 	}
-	p.item("api keys", "only the chosen providers' keys, which can be read inside the sandbox")
+	p.item("api keys", apiKeys(f))
 	p.item("network", "open: the internet, your local network and services on this machine, but not other sandboxes")
 
 	h := "non-root user, read-only root filesystem, no capabilities, no-new-privileges"
@@ -176,6 +177,19 @@ func isolation(p *printer, f Facts) {
 		h += "; no seccomp filter, as Docker's is switched off"
 	}
 	p.item("hardening", h)
+}
+
+// apiKeys says where the API keys of a new sandbox's providers are.
+func apiKeys(f Facts) string {
+	if !f.Gateway {
+		return "only the chosen providers' keys, which can be read inside the sandbox (" + gateway.Switch + " is off)"
+	}
+	s := "stay on this machine: a sandbox reaches its providers through a gateway here that puts the key into each request, so it can use them while it's open and can't read or copy their keys."
+	if n := len(f.KeysInside); n > 0 {
+		s += " Except " + strings.Join(f.KeysInside, ", ") + ", whose key goes into the sandbox: your opencode config doesn't say where " +
+			map[bool]string{true: "its API is", false: "their APIs are"}[n == 1] + " (options.baseURL)."
+	}
+	return s
 }
 
 func boundary(f Facts) string {

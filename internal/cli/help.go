@@ -43,13 +43,14 @@ data are refused.
   -p PROVIDER  the opencode provider(s) the sandbox may use, from your
                opencode config; several as a,b (asked if omitted, automatic
                if you have only one). The sandbox gets a config with only
-               those providers and their API keys; opencode's built-in
-               providers are switched off.
+               those providers; opencode's built-in providers are switched
+               off. Their API keys stay on this machine: opencode reaches
+               each provider through a gateway that puts its key in.
   -- ARGS      pass the remaining arguments to opencode`},
 	{"ls", "", "list sandboxes", `
 Lists sandboxes: their state, what isolates them (docker, gvisor or apple),
-their SSH key (* when its private part is stored inside), providers, age and
-the folder they were copied from.`},
+their SSH key (* when its private part is stored inside), providers (* when
+an API key is stored inside), age and the folder they were copied from.`},
 	{"open", "[NAME]", "reopen a sandbox, continuing its last opencode session", `
 Reopens a sandbox and continues its last opencode session, or attaches to it
 if it's open in another terminal (not in Apple container). Without NAME, asks
@@ -152,6 +153,8 @@ the dashboard: your sandboxes, and keys to create, open, copy and delete them.
                                Docker's own default)
   OPENCODE_SANDBOX_NO_AGENT    1: keep keys inside sandboxes even where a host
                                ssh-agent would work
+  OPENCODE_SANDBOX_GATEWAY     off: give new sandboxes their providers' API
+                               keys, instead of a gateway that keeps them here
   OPENCODE_SANDBOX_SEED_HOSTS  hosts whose keys are copied from your
                                ~/.ssh/known_hosts into sandboxes, so the first
                                hop is verified; e.g. "[jump.example.com]:2222"

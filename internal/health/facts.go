@@ -7,11 +7,13 @@ import (
 	"bytes"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 
 	"github.com/apocas/opencode-sandbox/internal/backend"
+	"github.com/apocas/opencode-sandbox/internal/gateway"
 	"github.com/apocas/opencode-sandbox/internal/occonfig"
 	"github.com/apocas/opencode-sandbox/internal/platform"
 	"github.com/apocas/opencode-sandbox/internal/run"
@@ -63,6 +65,12 @@ type Facts struct {
 	Config    string
 	ConfigErr string // why the config can't be used; "" if it can
 	Providers int
+	// Gateway: new sandboxes reach their providers through a gateway, which
+	// keeps the API keys on this machine. KeysInside are the providers whose
+	// key goes into a sandbox all the same: the gateway doesn't know where
+	// their API is.
+	Gateway    bool
+	KeysInside []string
 
 	MissingSSH []string // OpenSSH tools not on PATH
 	PidsLimit  int
@@ -150,11 +158,19 @@ func Gather(r run.Runner, docker, apple backend.Engine, version, image string) F
 	case err != nil || root == nil || root == false:
 		f.ConfigErr = "not JSON"
 	default:
-		f.Providers = len(occonfig.ProviderIDs(root))
+		ids := occonfig.ProviderIDs(root)
+		f.Providers = len(ids)
 		if f.Providers == 0 {
 			f.ConfigErr = "no providers"
 		}
+		_, skipped := gateway.Routes(root, ids, gateway.Env{Getenv: os.Getenv, Dir: filepath.Dir(f.Config), Home: state.Home()})
+		for _, id := range ids {
+			if _, ok := skipped[id]; ok {
+				f.KeysInside = append(f.KeysInside, id)
+			}
+		}
 	}
+	f.Gateway = gateway.Wanted(os.Getenv(gateway.Switch))
 
 	for _, tool := range []string{"ssh-keygen", "ssh-agent", "ssh-add"} {
 		if _, err := exec.LookPath(tool); err != nil {

@@ -44,8 +44,13 @@ type Sandbox struct {
 	// ssh-agent where it runs).
 	KeyInside bool
 	Providers string // "" for sandboxes from before provider selection
-	Source    string // the folder it was copied from
-	Version   string // the opencode-sandbox that created it ("" before 0.1)
+	// Gateway: its providers' API keys stay on this machine; without it
+	// (sandboxes from before 0.9.0) they're in its config.
+	Gateway bool
+	// APIKeysInside: its config has an API key (see Core.keysInside).
+	APIKeysInside bool
+	Source        string // the folder it was copied from
+	Version       string // the opencode-sandbox that created it ("" before 0.1)
 }
 
 var (
@@ -101,7 +106,8 @@ func (a *Core) Sandboxes() ([]Sandbox, error) {
 			Name: r.Name, State: st, Status: status, Created: friendlyFix(r.Created),
 			Engine: r.Engine, RunsIn: a.runsIn(r),
 			KeyKind: r.KeyKind, Key: r.Key, KeyName: key[strings.LastIndexByte(key, '/')+1:],
-			KeyInside: r.KeyMode == "file", Providers: r.Providers, Source: r.Source, Version: r.Version,
+			KeyInside: r.KeyMode == "file", Providers: r.Providers, Gateway: r.Gateway != "", APIKeysInside: a.keysInside(r),
+			Source: r.Source, Version: r.Version,
 		}
 	}
 	return out, nil
@@ -165,6 +171,7 @@ func (a *Core) Remove(n string) (Removed, error) {
 	sshagent.Stop(state.AgentDir(n))
 	_ = os.Remove(state.ConfigFile(n))
 	_ = os.RemoveAll(state.SandboxDir(n))
+	_ = os.RemoveAll(state.GatewayDir(n)) // its gateway ended with it
 	r := Removed{Name: n}
 	if kind == "disposable" {
 		r.Disposable = true

@@ -61,6 +61,11 @@ func ConfigFile(name string) string { return RunDir() + "/configs/" + name + ".j
 // mounted (Apple container): its config and the host keys it trusts.
 func SandboxDir(name string) string { return RunDir() + "/sandboxes/" + name }
 
+// GatewayDir holds what the gateway of a sandbox needs on this machine: the
+// token that stands for your API keys in the sandbox's config, a lock and a
+// log. Nothing of it is mounted into the sandbox.
+func GatewayDir(name string) string { return RunDir() + "/gateways/" + name }
+
 // DataDir holds what must outlive a reboot: disposable keys and the host
 // keys sandboxes trust. $XDG_DATA_HOME/opencode-sandbox, by default
 // ~/.local/share/opencode-sandbox.

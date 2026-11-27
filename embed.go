@@ -6,5 +6,5 @@ import "embed"
 
 // Files is the image's build context.
 //
-//go:embed Dockerfile entrypoint.sh ssh_config
+//go:embed Dockerfile entrypoint.sh gateway.pl ssh_config
 var Files embed.FS

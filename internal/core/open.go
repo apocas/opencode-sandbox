@@ -20,7 +20,7 @@ import (
 var ErrHangup = errors.New("the terminal went away")
 
 // Prepare gets a sandbox ready to open: its image, its ssh-agent, a fresh
-// copy of its config (a rotated API key is picked up) and the files it
+// copy of its config (what changed in yours is picked up) and the files it
 // mounts. Opening one that's already open (attaching) needs it too.
 func (a *Core) Prepare(name string) error {
 	c := state.Prefix + name
@@ -64,8 +64,12 @@ func (a *Core) Prepare(name string) error {
 		if err != nil {
 			return err
 		}
+		gw, err := label("gateway")
+		if err != nil {
+			return err
+		}
 		if provs != "" {
-			if err := a.writeConfig(e, name, provs); err != nil {
+			if err := a.writeConfig(e, name, provs, gw != ""); err != nil {
 				return err
 			}
 		} else {
@@ -142,6 +146,13 @@ func (o *OpenCommand) Run() error {
 	}
 	if r, ok := a.r.(run.OS); ok && r.Debug != nil {
 		fmt.Fprintf(r.Debug, "+ %s\n", run.Quote(argv))
+	}
+	// Its providers' API keys stay here: the gateway that puts them into its
+	// requests starts with it, and ends when it closes.
+	if gw, _ := e.Label(c, state.Label("gateway")); gw != "" {
+		if err := a.startGateway(name); err != nil {
+			a.Rep.Warn(fmt.Sprintf("can't start the gateway of sandbox '%s', so opencode won't reach its providers: %v", name, err))
+		}
 	}
 	// Caught before the client starts, so none is missed. SIGINT is the
 	// client's to handle (it forwards it to opencode); the launcher only

@@ -9,9 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/apocas/opencode-sandbox/internal/backend"
+	"github.com/apocas/opencode-sandbox/internal/gateway"
 	"github.com/apocas/opencode-sandbox/internal/occonfig"
 	"github.com/apocas/opencode-sandbox/internal/run"
 	"github.com/apocas/opencode-sandbox/internal/sshagent"
@@ -27,7 +29,10 @@ type sandbox struct {
 	// agent is possible) or none.
 	keyKind, keyPath, keyName, keyMode string
 	providers                          string // comma-separated
-	keyCreated, created                bool
+	// gateway: its providers' API keys stay on this machine (see package
+	// gateway).
+	gateway             bool
+	keyCreated, created bool
 }
 
 var validName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
@@ -67,7 +72,7 @@ func (a *Core) Create(o CreateOptions) (*Created, error) {
 	if err := a.CheckName(name); err != nil {
 		return nil, err
 	}
-	sb := &sandbox{name: name, workspace: workspace}
+	sb := &sandbox{name: name, workspace: workspace, gateway: gatewayWanted()}
 	if o.Key == "" {
 		return nil, errors.New("no SSH key chosen; pass -k NAME, -k new or -k none")
 	}
@@ -88,7 +93,7 @@ func (a *Core) Create(o CreateOptions) (*Created, error) {
 		}
 	}()
 	a.Rep.Step(fmt.Sprintf("Creating sandbox '%s'", name))
-	if err := a.writeConfig(e, name, sb.providers); err != nil {
+	if err := a.writeConfig(e, name, sb.providers, sb.gateway); err != nil {
 		return nil, err
 	}
 	if sb.keyKind == "disposable" {
@@ -223,10 +228,10 @@ func tsv(s string) string {
 }
 
 // writeConfig (re)writes a sandbox's private opencode config: a filtered copy
-// of yours. It lives in the runtime dir (RAM, user-only) and is regenerated
-// on every start, so changes to your config (e.g. a rotated API key) reach
-// the sandbox.
-func (a *Core) writeConfig(e backend.Engine, name, providers string) error {
+// of yours, with a gateway in the place of its providers' API keys where the
+// sandbox has one. It lives in the runtime dir (RAM, user-only) and is
+// regenerated on every start, so changes to your config reach the sandbox.
+func (a *Core) writeConfig(e backend.Engine, name, providers string, gw bool) error {
 	cfg := state.Config()
 	root, _ := occonfig.Load(cfg)
 	ids := occonfig.ProviderIDs(root)
@@ -247,6 +252,11 @@ func (a *Core) writeConfig(e backend.Engine, name, providers string) error {
 	}
 	if err := state.EnsureRunDir(); err != nil {
 		return err
+	}
+	if gw {
+		if err := a.throughGateway(name, root, filtered, have); err != nil {
+			return err
+		}
 	}
 	if !e.Caps().FileBinds {
 		return writeSandboxDir(name, occonfig.Encode(filtered))
@@ -362,6 +372,11 @@ func (a *Core) createContainer(e backend.Engine, sb *sandbox, opencodeArgs []str
 		Image: image(),
 		Cmd:   append([]string{"opencode"}, opencodeArgs...),
 	}
+	if sb.gateway {
+		// entrypoint.sh waits for the gateway there before opencode starts.
+		s.Labels = append(s.Labels, [2]string{state.Label("gateway"), "1"})
+		s.Env = append(s.Env, [2]string{"OPENCODE_SANDBOX_GATEWAY", strconv.Itoa(gateway.Port)})
+	}
 	if !e.Caps().FileBinds {
 		// Only folders can be mounted: the sandbox's own folder instead.
 		s.Binds = []backend.Bind{{Src: state.SandboxDir(sb.name), Dst: "/run/opencode-sandbox/config", ReadOnly: true}}
@@ -439,6 +454,7 @@ func (a *Core) runtime() string {
 func (a *Core) abandon(sb *sandbox) {
 	_ = os.Remove(state.ConfigFile(sb.name))
 	_ = os.RemoveAll(state.SandboxDir(sb.name))
+	_ = os.RemoveAll(state.GatewayDir(sb.name))
 	sshagent.Stop(state.AgentDir(sb.name))
 	if sb.keyCreated { // only a key we just made
 		a.discardKey(sb.name, sb.keyPath)

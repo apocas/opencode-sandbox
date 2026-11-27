@@ -79,6 +79,8 @@ type model struct {
 	goTo      string            // a sandbox to move to once it's listed
 	fps       map[string]string // key fingerprints, looked up lazily
 	agents    map[string]bool
+	// gateways: the open sandboxes whose gateway is being served.
+	gateways map[string]bool
 
 	filter    textinput.Model
 	filtering bool
@@ -128,7 +130,7 @@ func newModel(c *core.Core, t *ui.Theme, setupErr error) *model {
 	f.Placeholder = "filter by name, folder or provider"
 	m := &model{
 		c: c, t: t, ev: make(events, 1024), setupErr: setupErr,
-		marked: map[string]bool{}, fps: map[string]string{}, agents: map[string]bool{},
+		marked: map[string]bool{}, fps: map[string]string{}, agents: map[string]bool{}, gateways: map[string]bool{},
 		filter: f,
 		spin:   spinner.New(spinner.WithSpinner(spinner.MiniDot), spinner.WithStyle(t.Accented)),
 	}
@@ -463,6 +465,7 @@ func (m *model) setRows(ss []core.Sandbox) {
 	}
 	for _, s := range ss {
 		m.agents[s.Name] = s.State == core.StateOpen && !s.KeyInside && s.KeyKind != "none" && m.c.AgentRunning(s.Name)
+		m.gateways[s.Name] = s.State == core.StateOpen && s.Gateway && m.c.GatewayRunning(s.Name)
 	}
 }
 

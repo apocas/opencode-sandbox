@@ -48,6 +48,7 @@ RUN if g="$(getent group "${GID}")"; then groupmod -n agent "${g%%:*}"; \
 
 COPY --chmod=644 ssh_config /etc/ssh/ssh_config.d/10-opencode-sandbox.conf
 COPY --chmod=755 entrypoint.sh /usr/local/bin/agent-entrypoint
+COPY --chmod=755 gateway.pl /usr/local/bin/opencode-sandbox-gateway
 
 # SSH_AUTH_SOCK is set per sandbox by the launcher, only when it has a key.
 ENV OPENCODE_DISABLE_AUTOUPDATE=1

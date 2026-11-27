@@ -2,8 +2,8 @@
 # End-to-end test of opencode-sandbox against a real Docker or Apple
 # container (whichever new sandboxes go to; OPENCODE_SANDBOX_ENGINE picks).
 # Creates, opens, copies into/out of and deletes sandboxes named it-*, with a
-# throwaway opencode config (no real provider is called) and its own data
-# folder. It touches no other sandbox: where you have some, the steps that
+# throwaway opencode config (its provider is test/provider.py, a stand-in on
+# this machine; no real one is called) and its own data folder. It touches no other sandbox: where you have some, the steps that
 # act on "all" or "the first" sandbox are skipped.
 #
 # Usage: [EXPECT_RUNTIME=NAME] test/integration.sh BINARY [BASH_LAUNCHER]
@@ -24,8 +24,14 @@ unset OPENCODE_SANDBOX_SEED_HOSTS OPENCODE_SANDBOX_LEGACY_DIR
 DATA="$XDG_DATA_HOME/opencode-sandbox"
 pass=0 fail=0
 
-cat >"$T/one.json" <<'EOF'
-{"provider":{"p1":{"name":"Fake","npm":"@ai-sdk/openai-compatible","models":{"m1":{}},"options":{"apiKey":"not-a-key","baseURL":"http://127.0.0.1:9/v1"}}}}
+# The provider: a stand-in that records what it's sent.
+REAL_KEY=it-real-key-4c1f
+python3 "$(dirname "$0")/provider.py" "$T/provider.log" "$T/provider.port" &
+PROVIDER=$!
+disown "$PROVIDER"
+for _ in $(seq 50); do [[ -s "$T/provider.port" ]] && break; sleep 0.1; done
+cat >"$T/one.json" <<EOF
+{"model":"p1/m1","provider":{"p1":{"name":"Fake","npm":"@ai-sdk/openai-compatible","models":{"m1":{}},"options":{"apiKey":"$REAL_KEY","baseURL":"http://127.0.0.1:$(cat "$T/provider.port")/v1"}}}}
 EOF
 cat >"$T/two.json" <<'EOF'
 {"provider":{"p1":{"name":"One","models":{"m1":{}}},"p2":{"name":"Two","models":{"m2":{},"m3":{}}}}}
@@ -66,6 +72,7 @@ pty() {
     | tr -d '\r' | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g; s/\x1b[]P_][^\x07\x1b]*\(\x07\|\x1b\\\\\)//g'
 }
 cleanup() {
+  kill "$PROVIDER" 2>/dev/null
   if command -v docker >/dev/null; then
     docker ps -a --format '{{.Names}}' | grep '^opencode-sandbox-it-' | xargs -r docker rm -f -v >/dev/null 2>&1
   fi
@@ -90,6 +97,11 @@ state() {
   else
     docker inspect -f '{{.State.Status}}' "$1" 2>/dev/null
   fi
+}
+# xc NAME CMD...: run CMD inside an open sandbox
+xc() {
+  local c="opencode-sandbox-$1"; shift
+  if [[ "$ENGINE" == apple ]]; then container exec "$c" "$@"; else docker exec "$c" "$@"; fi
 }
 echo "== engine: $ENGINE"
 
@@ -119,6 +131,8 @@ refuse "~/.ssh refused" 'inside ~/.ssh' "$BIN" new "$HOME/.ssh" -k none
 refuse "no key without a terminal" 'pass -k NAME' "$BIN" new "$T/ws" -n it-x
 if (( FOREIGN == 0 )); then check "ls empty" 'no sandboxes' "$BIN" ls; else none "ls has none of the test's"; fi
 check  "health" 'used +(Docker|gVisor|Apple container)' "$BIN" health
+check  "health: API keys stay on this machine" 'api keys +stay on this machine' "$BIN" health
+OPENCODE_SANDBOX_GATEWAY=off check "health: unless the gateway is off" '\(OPENCODE_SANDBOX_GATEWAY is off\)' "$BIN" health
 if [[ "$ENGINE" == apple ]]; then
   DOCKER_HOST=unix:///nonexistent.sock check "health without Docker" "only sandboxes made with it need it" "$BIN" health
 else
@@ -192,9 +206,33 @@ grep -q 'Folder to copy' <<<"$out" && grep -q 'no sandbox created' <<<"$out" \
   && ok "dashboard: esc leaves the new-sandbox form" || bad "dashboard: esc leaves the new-sandbox form" "$(tail -c 3000 <<<"$out")"
 [[ "$(names | grep -c '^it-')" == 4 ]] && ok "the form created nothing" || bad "the form created nothing" "$("$BIN" ls)"
 
-echo "== closing the terminal stops the sandbox"
+echo "== the gateway, and closing the terminal"
 pty "" "$BIN" new -n it-h -k none >/dev/null 2>&1 &
+job=$!
 for _ in $(seq 60); do [[ "$(state opencode-sandbox-it-h)" == running ]] && break; sleep 1; done
+# The sandbox's opencode config and what it was started with: the real key is
+# in neither, and the provider's address is the gateway inside the sandbox.
+CFG='"${OPENCODE_CONFIG:-$HOME/.config/opencode/opencode.json}"'
+out="$(xc it-h sh -c "cat $CFG; echo; env" 2>&1)"
+grep -q '"baseURL": "http://127.0.0.1:17872/p1"' <<<"$out" && ! grep -q "$REAL_KEY" <<<"$out" \
+  && ok "the API key isn't in the sandbox" || bad "the API key isn't in the sandbox" "$(sed "s/$REAL_KEY/<THE REAL KEY>/g" <<<"$out" | head -30)"
+# A request as opencode makes it, with what its config has for a key.
+auth="-H \"Authorization: Bearer \$(jq -r .provider.p1.options.apiKey $CFG)\""
+: >"$T/provider.log"
+out="$(xc it-h sh -c "curl -sS -m 20 $auth http://127.0.0.1:17872/p1/models" 2>&1)"
+grep -q '"id": "m1"' <<<"$out" && grep -q "\"authorization\": \"Bearer $REAL_KEY\"" "$T/provider.log" \
+  && ok "the gateway puts the key into a request" || bad "the gateway puts the key into a request" "$out"$'\n'"$(cat "$T/provider.log")"
+out="$(xc it-h sh -c "curl -sS -m 20 -N $auth -H 'Content-Type: application/json' -d '{\"model\":\"m1\",\"stream\":true}' http://127.0.0.1:17872/p1/chat/completions" 2>&1)"
+grep -q 'data: \[DONE\]' <<<"$out" && ok "an answer is streamed back" || bad "an answer is streamed back" "$out"
+# The key goes into the header keys travel in and nowhere else, and only to
+# this sandbox's provider.
+: >"$T/provider.log"
+out="$(xc it-h sh -c "curl -sS -m 20 -o /dev/null -H 'Authorization: Bearer nope' -H \"X-Debug: \$(jq -r .provider.p1.options.apiKey $CFG)\" http://127.0.0.1:17872/p1/models
+  curl -sS -m 20 -o /dev/null -w '%{http_code} ' --path-as-is http://127.0.0.1:17872/p1/../x
+  curl -sS -m 20 -o /dev/null -w '%{http_code}' http://127.0.0.1:17872/p2/models" 2>&1)"
+[[ "$out" == "400 404" ]] && grep -q '"Bearer nope"' "$T/provider.log" && ! grep -q "$REAL_KEY" "$T/provider.log" \
+  && ok "the key goes nowhere else" || bad "the key goes nowhere else" "$out"$'\n'"$(cat "$T/provider.log")"
+pgrep -f -- "$BIN --internal-gateway it-h" >/dev/null && ok "its gateway runs while it's open" || bad "its gateway runs while it's open"
 pid="$(pgrep -f -- "$BIN new -n it-h" | head -1)"
 if [[ -n "$pid" ]]; then
   kill -HUP "$pid"
@@ -203,7 +241,19 @@ if [[ -n "$pid" ]]; then
 else
   bad "hangup test: launcher not found"
 fi
-wait 2>/dev/null
+wait "$job" 2>/dev/null
+for _ in $(seq 20); do pgrep -f -- "$BIN --internal-gateway it-h" >/dev/null || break; sleep 0.5; done
+pgrep -f -- "$BIN --internal-gateway it-h" >/dev/null && bad "its gateway ends with it" || ok "its gateway ends with it"
+# opencode itself, asking the provider one question through the gateway.
+: >"$T/provider.log"
+check "opencode reaches its provider" 'the gateway works' "$BIN" new -n it-q -k none -- run hello
+grep -q "\"path\": \"/v1/chat/completions\", \"headers\": {\"authorization\": \"Bearer $REAL_KEY\"" "$T/provider.log" \
+  && ok "with the key put in on this machine" || bad "with the key put in on this machine" "$(cat "$T/provider.log")"
+# Without a gateway, as before 0.9.0, the key is in the sandbox: ls says so.
+OPENCODE_SANDBOX_GATEWAY=off check "create without a gateway" 'opencode v?[0-9]' "$BIN" new -n it-k -k none -- --version
+check "ls marks an API key stored inside" 'it-k .* p1\* ' "$BIN" ls
+check "ls: and only there" 'it-q .* p1 ' "$BIN" ls
+check "ls explains the mark" '\* API key stored inside the sandbox' "$BIN" ls
 
 echo "== delete"
 out="$("$BIN" rm it-a it-b it-nope 2>&1)"
@@ -216,7 +266,7 @@ if (( FOREIGN == 0 )); then
   check "ls empty again" 'no sandboxes' "$BIN" ls
 else
   skip "rm --all -y"
-  check "rm the rest by name" 'removed it-c' "$BIN" rm it-c it-d it-h
+  check "rm the rest by name" 'removed it-c' "$BIN" rm it-c it-d it-h it-q it-k
   none "ls has none of the test's again"
 fi
 

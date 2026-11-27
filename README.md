@@ -3,12 +3,13 @@
 Run [opencode](https://opencode.ai) in hardened sandboxes (Docker containers,
 or on a Mac a VM for each sandbox with Apple's `container`) where the agent can
 use **exactly one SSH key** (or none), works on a **copy** of your files, and
-only talks to the **LLM provider you pick**.
+only talks to the **LLM provider you pick**, without ever holding its
+**API key**.
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/overview-dark.svg">
-    <img src="docs/overview-light.svg" width="880" alt="Of your folders, SSH keys and LLM providers, a sandbox gets a copy of one folder, a new disposable key of its own instead of any of yours, and the providers you pick; the rest stays out. The wall around it is a hardened Docker container, or after `opencode-sandbox setup` a gVisor kernel of its own on Linux or an Apple container VM of its own on a Mac.">
+    <img src="docs/overview-light.svg" width="880" alt="Of your folders, SSH keys, LLM providers and API keys, a sandbox gets a copy of one folder, a new disposable key of its own instead of any of yours, and the providers you pick. It gets none of your API keys: it has a token, and every request it makes goes out through a gateway on your machine that swaps the token for the real key. The wall around it is a hardened Docker container, or after `opencode-sandbox setup` a gVisor kernel of its own on Linux or an Apple container VM of its own on a Mac.">
   </picture>
 </p>
 
@@ -31,9 +32,13 @@ down:
 - **Your files are copied, not mounted.** The sandbox gets a snapshot of a
   folder. Nothing the agent writes reaches the original.
 - **Only the providers you choose.** Each sandbox gets a filtered copy of your
-  opencode config with just the selected provider(s) and their API keys.
-  opencode's built-in providers (such as its free hosted models) are switched
-  off.
+  opencode config with just the selected provider(s). opencode's built-in
+  providers (such as its free hosted models) are switched off.
+- **API keys stay on your machine.** That copy has a gateway where your
+  providers' API keys were: opencode's requests leave the sandbox through
+  opencode-sandbox on your machine, which puts the real key in on the way to
+  the provider. The agent can *use* your provider while the sandbox is open,
+  but can't read or copy its key ([API keys](#api-keys)).
 - **Hardened container.** Non-root user, read-only root filesystem, all
   capabilities dropped, no setuid programs, `no-new-privileges`, a PID limit,
   and a network on which sandboxes can't reach each other.
@@ -65,8 +70,44 @@ Tested with opencode 2.4.2 on macOS 27 (arm64) with Apple container 1.7.1 and
 Docker Desktop 29, and on Linux (arm64, Docker 27) with runc and with gVisor
 (release-20261123), with and without `--host-uds=open`. Earlier versions were
 also tested on Ubuntu (x86_64) with Docker 29. `test/integration.sh` runs every
-command against a real Docker or Apple container; CI runs it on Linux with
-runc and gVisor.
+command against a real Docker or Apple container, and has opencode ask a
+stand-in provider on the machine a question through the gateway; CI runs it
+on Linux with runc and gVisor.
+
+## API keys
+
+A sandbox's opencode config doesn't have your providers' API keys. In their
+place it has a token that means nothing outside the sandbox, and each
+provider's address is a gateway, `http://127.0.0.1:17872/PROVIDER`, inside the
+sandbox. What opencode sends there is relayed to opencode-sandbox on your
+machine, which swaps the token for the real key and passes the request on to
+the provider.
+
+- **Nothing listens on a network.** The sandbox's end of the gateway is started
+  with the engine's `exec`, and the two ends talk over its stdin and stdout. So
+  it works the same with Docker, Docker Desktop, gVisor and Apple container,
+  and no other sandbox or machine can reach it.
+- **The key goes only where a key belongs:** into the `Authorization`,
+  `x-api-key`, `api-key` or `x-goog-api-key` header of a request to that
+  provider's API, when that header is the token. The headers your config sets
+  under `options.headers` are kept back and put in the same way. Nothing is
+  swapped in a request's body or address, so a model can't be asked to say a
+  key back.
+- **`{env:NAME}` and `{file:PATH}`** in a key are resolved on your machine,
+  where the variable or file is.
+- **A changed config is picked up while a sandbox is open:** rotate a key and
+  the next request uses it.
+
+The gateway has to know where a provider's API is: from `options.baseURL` in
+your config, or for `anthropic`, `openai`, `google`, `groq`, `mistral`, `xai`
+and `openrouter` (or their `npm` packages) from their well-known addresses.
+For any other provider without a `baseURL`, opencode-sandbox tells you when
+the sandbox starts and puts that key into its config, as it did before 0.9.0.
+`ls` marks such sandboxes, and those made before 0.9.0, with `*` after the
+provider; `health` names the providers concerned.
+
+`OPENCODE_SANDBOX_GATEWAY=off` creates sandboxes without a gateway, with the
+keys in their config.
 
 ## Isolation
 
@@ -186,7 +227,7 @@ Other ways:
 check it against `SHA256SUMS`, and put it on your `PATH`:
 
 ```bash
-v=0.8.0 os=$(uname -s | tr A-Z a-z) arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+v=0.9.0 os=$(uname -s | tr A-Z a-z) arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 f=opencode-sandbox_${v}_${os}_${arch}
 curl -fLO https://github.com/apocas/opencode-sandbox/releases/download/v$v/$f
 curl -fL https://github.com/apocas/opencode-sandbox/releases/download/v$v/SHA256SUMS | grep " $f\$" | shasum -a 256 -c
@@ -234,12 +275,16 @@ clone:
 cd /path/to/opencode-sandbox           # your clone
 git checkout master && git pull        # the latest code
 # or a specific release:
-git fetch --tags && git checkout v0.8.0
+git fetch --tags && git checkout v0.9.0
 opencode-sandbox version
 ```
 
 - The next run builds the image for the new version by itself (or run
   `opencode-sandbox build`).
+- **Coming from 0.8 or earlier:** new sandboxes no longer get your providers'
+  API keys ([API keys](#api-keys)). The sandboxes you already have keep the
+  key in their config: `ls` marks them with `*`. Create new ones to get it
+  out.
 - **Coming from 0.7 or earlier:** where Docker has a gVisor runtime that
   doesn't cost sandboxes your ssh-agent, new sandboxes now run on it by
   themselves; `OPENCODE_SANDBOX_RUNTIME=runc` keeps them on plain Docker
@@ -409,7 +454,13 @@ Runtime files live in `$XDG_RUNTIME_DIR/opencode-sandbox/`, or
   provider libraries.
 - `configs/NAME.json`: the sandbox's filtered opencode config, in a directory
   only you can open. It's regenerated from your config every time the sandbox
-  starts, so a rotated API key is picked up.
+  starts.
+- `gateways/NAME/`: the sandbox's gateway ([API keys](#api-keys)): the token
+  its config has in place of your keys, and a log of the requests it passed on
+  (provider, path, status; no keys and no contents). The gateway is a second
+  opencode-sandbox process, started when the sandbox opens; it reads your
+  config for the real keys and ends when the sandbox closes. Nothing of this
+  folder is mounted into the sandbox.
 - `sandboxes/NAME/`: the same for a sandbox in Apple container, which can only
   mount folders: its config and a copy of `known_hosts`.
 Persistent files live in `$XDG_DATA_HOME/opencode-sandbox/`, by default
@@ -427,6 +478,9 @@ In the sandbox:
   kept until you `rm` the sandbox.
 - `~/.ssh` holds only the public key; `SSH_AUTH_SOCK` points at the mounted
   agent socket. A sandbox created with `-k none` gets neither.
+- `127.0.0.1:17872` is the gateway to your providers, while the sandbox is
+  open: `opencode-sandbox-gateway`, a small program in the image that relays
+  what it's sent to your machine. opencode starts once it's listening.
 - Without a host agent, the disposable key is mounted read-only instead, copied
   to `~/.ssh/sandbox_key` at each start, and loaded into an ssh-agent running
   inside the sandbox.
@@ -441,7 +495,13 @@ In the sandbox:
 - **Without a host agent, the disposable key can be copied out.** Whatever runs
   in the sandbox can read it, and a copy keeps working wherever you authorized
   it until you remove it from `authorized_keys`, even after `rm`.
-- **The provider API key is readable inside the sandbox**, since opencode needs it.
+- **Anything inside an open sandbox can use its providers**, and so spend your
+  credit with them, for as long as it's open. It can't read their keys, with
+  two exceptions: a provider the gateway can't serve, and sandboxes made
+  before 0.9.0 ([API keys](#api-keys)).
+- **Other secrets in your opencode config are copied as they are**, such as an
+  MCP server's token. Only a provider's `options.apiKey` and `options.headers`
+  stay behind the gateway.
 - **A sandbox's home persists until you delete it.** Something planted there runs
   again when you resume that sandbox.
 - **Prompt injection.** Text in files or command output can try to steer the
@@ -456,6 +516,7 @@ In the sandbox:
 |---|---|
 | `OPENCODE_SANDBOX_CONFIG` | opencode config to take providers from (default `~/.config/opencode/opencode.json`) |
 | `OPENCODE_SANDBOX_NO_AGENT` | `1` to use the no-agent mode ([Platforms](#platforms)) even where a host ssh-agent would work |
+| `OPENCODE_SANDBOX_GATEWAY` | `off` to give new sandboxes their providers' API keys instead of a gateway ([API keys](#api-keys)) |
 | `OPENCODE_SANDBOX_SEED_HOSTS` | space-separated hosts whose keys are copied from `~/.ssh/known_hosts` into sandboxes; read when `known_hosts` is created, delete it to re-seed |
 | `OPENCODE_SANDBOX_ENGINE` | `docker` or `apple`: where new sandboxes go (default: Apple container where it runs, else Docker) |
 | `OPENCODE_SANDBOX_RUNTIME` | a Docker runtime for new sandboxes, e.g. `runc` (default: gVisor where Docker has it, else Docker's own default; see [Isolation](#isolation)) |

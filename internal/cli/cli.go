@@ -109,6 +109,9 @@ func (x *cli) main(args []string) (int, error) {
 	case core.HangupCleanupArg:
 		x.c.HangupCleanup(first(rest))
 		return 0, nil
+	case core.GatewayArg:
+		x.c.Gateway(first(rest))
+		return 0, nil
 	case "health":
 		return x.health()
 	case "update": // needs no engine, and may run as root where the program is root's
@@ -245,7 +248,7 @@ func (x *cli) newCmd(args []string) (int, error) {
 				opts = append(opts, ui.Option{Value: p.ID, Label: p.ID, Detail: p.Description})
 			}
 			if o.Providers, err = x.t.PickMany(fmt.Sprintf("Which opencode providers may sandbox '%s' use?", o.Name),
-				"Space selects, enter confirms. The sandbox gets only these providers and their API keys.", opts); err != nil {
+				"Space selects, enter confirms. The sandbox gets only these providers.", opts); err != nil {
 				return 0, err
 			}
 		}
@@ -318,6 +321,12 @@ func (x *cli) ls(args []string) (int, error) {
 	for _, s := range ss {
 		if s.KeyInside {
 			x.out(x.t.Dim.Render("* private key stored inside the sandbox (no host ssh-agent where it runs)"))
+			break
+		}
+	}
+	for _, s := range ss {
+		if s.APIKeysInside {
+			x.out(x.t.Dim.Render("* API key stored inside the sandbox (made before 0.9.0 or with the gateway off, or a provider without options.baseURL)"))
 			break
 		}
 	}

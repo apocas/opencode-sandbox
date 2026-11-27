@@ -4,6 +4,42 @@ All notable changes to opencode-sandbox. Versions follow
 [Semantic Versioning](https://semver.org); each release is tagged `vX.Y.Z`.
 To update, see [Updating](README.md#updating).
 
+## [0.9.0] - 2026-11-27
+
+### Added
+
+- **Your providers' API keys no longer go into sandboxes.** A new sandbox's
+  opencode config has a token in their place and a gateway inside the sandbox
+  (`127.0.0.1:17872`) as each provider's address. What opencode sends there
+  is relayed to opencode-sandbox on your machine, which puts the real key into
+  the request and passes it on to the provider. The agent can use a provider
+  while its sandbox is open, and can't read or copy the key. See
+  [API keys](README.md#api-keys).
+  - Nothing listens on a network: the two ends talk over the engine's `exec`,
+    so it works the same with Docker, Docker Desktop, gVisor and Apple
+    container.
+  - The key is put only into a header keys travel in (`Authorization`,
+    `x-api-key`, `api-key`, `x-goog-api-key`) of a request to that provider,
+    and the headers of `options.headers` are kept back the same way.
+  - A key written as `{env:NAME}` or `{file:PATH}` is resolved on your machine,
+    and a key you rotate is used from the next request on.
+  - It needs the provider's address: `options.baseURL`, or the well-known one
+    of `anthropic`, `openai`, `google`, `groq`, `mistral`, `xai` and
+    `openrouter`. A provider without either still gets its key in the
+    sandbox's config, and opencode-sandbox says so.
+- `ls` marks a sandbox that has an API key in its config with `*` after its
+  provider, the dashboard shows where a sandbox's API keys are, and `health`
+  says where a new sandbox's will be.
+- `OPENCODE_SANDBOX_GATEWAY=off` creates sandboxes as before, with the keys
+  inside.
+
+### Changed
+
+- Sandboxes you already have keep the API key in their config (they have no
+  gateway): create new ones to get it out.
+- The image has `opencode-sandbox-gateway`, the gateway's end inside a
+  sandbox, and opencode starts once it's listening.
+
 ## [0.8.0] - 2026-11-27
 
 ### Added
@@ -250,6 +286,7 @@ First release.
   `--resume` warns about sandboxes created by an older version.
 - Bundles opencode 2.4.2 (x86_64 and arm64 builds, checksums verified).
 
+[0.9.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.9.0
 [0.8.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.8.0
 [0.7.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.7.0
 [0.6.1]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.6.1

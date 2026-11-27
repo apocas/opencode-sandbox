@@ -19,9 +19,9 @@ import (
 func sample() []core.Sandbox {
 	return []core.Sandbox{
 		{Name: "api-7f3a", State: core.StateOpen, Status: "open (5 minutes)", Created: "2 hours ago", Engine: "apple", RunsIn: "apple",
-			KeyKind: "disposable", KeyName: "disposable", KeyInside: true, Providers: "my-provider", Source: "/src/api", Version: core.Version},
+			KeyKind: "disposable", KeyName: "disposable", KeyInside: true, Providers: "my-provider", Gateway: true, Source: "/src/api", Version: core.Version},
 		{Name: "web-12bc", State: core.StateClosed, Status: "closed 2 hours ago", Created: "3 days ago", Engine: "docker", RunsIn: "gvisor",
-			KeyKind: "home", Key: "/h/.ssh/id_ed25519", KeyName: "id_ed25519", Providers: "anthropic,openai", Source: "/src/web", Version: "0.4.0"},
+			KeyKind: "home", Key: "/h/.ssh/id_ed25519", KeyName: "id_ed25519", Providers: "anthropic,openai", APIKeysInside: true, Source: "/src/web", Version: "0.4.0"},
 		{Name: "infra", State: core.StateNew, Status: "new", Created: "just now", Engine: "docker", RunsIn: "docker",
 			KeyKind: "none", KeyName: "none", Providers: "", Source: "/ops"},
 	}
@@ -62,10 +62,29 @@ func TestListAndDetails(t *testing.T) {
 		}
 	}
 	details := strings.Join(strings.Fields(ansi.Strip(m.details(46))), " ")
-	for _, want := range []string{"a VM of its own (Apple container)", "disposable, stored inside the sandbox", "s shell · open in another terminal"} {
+	for _, want := range []string{"a VM of its own (Apple container)", "disposable, stored inside the sandbox", "s shell · open in another terminal",
+		"api keys on this machine, behind a gateway", "gateway not running; reopen to restart it"} {
 		if !strings.Contains(details, want) {
 			t.Errorf("details: missing %q in %q", want, details)
 		}
+	}
+	// Where a sandbox's API keys are, in the list and in words.
+	ss := sample()
+	for i, want := range []struct{ listed, words string }{
+		{"my-provider", "on this machine, behind a gateway"},
+		{"anthropic,openai*", "inside the sandbox (it has no gateway)"},
+		{"all (old sandbox)", "none"},
+	} {
+		if got := ui.Providers(ss[i]); got != want.listed {
+			t.Errorf("%s is listed with %q, want %q", ss[i].Name, got, want.listed)
+		}
+		if got := ui.APIKeys(ss[i]); got != want.words {
+			t.Errorf("%s: API keys %q, want %q", ss[i].Name, got, want.words)
+		}
+	}
+	ss[0].APIKeysInside = true
+	if got := ui.APIKeys(ss[0]); !strings.Contains(got, "inside the sandbox for a provider") || !strings.Contains(got, "the rest on this machine") {
+		t.Errorf("a gateway that can't serve every provider: %q", got)
 	}
 	for i, l := range strings.Split(out, "\n") {
 		if w := ansi.StringWidth(l); w > 120 {

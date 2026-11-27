@@ -13,7 +13,7 @@ func base(goos string) Facts {
 	return Facts{
 		Version: "0.5.0", GOOS: goos, Machine: "amd64", Home: "/home/u", DockerCLI: true, Engine: "docker",
 		Image: "opencode-sandbox:0.5.0", ImageOK: true,
-		Config: "/home/u/.config/opencode/opencode.json", Providers: 2, PidsLimit: 1024,
+		Config: "/home/u/.config/opencode/opencode.json", Providers: 2, PidsLimit: 1024, Gateway: true,
 	}
 }
 
@@ -180,6 +180,20 @@ func TestReport(t *testing.T) {
 			[]string{"no opencode config at ~/.config/opencode/opencode.json"}, nil},
 		{"config outside home", func(f *Facts) { f.Config = "/etc/oc.json"; f.ConfigErr = "not JSON" }, linux, false,
 			[]string{"can't parse /etc/oc.json as JSON"}, nil},
+		{"API keys stay here", nil, linux, true,
+			[]string{"api keys   stay on this machine: a sandbox reaches its providers through a gateway", "can't read or copy their keys."},
+			[]string{"Except", "can be read inside"}},
+		{"API keys stay here, in Apple container too", func(f *Facts) {
+			f.AppleCLI, f.AppleVersion, f.AppleRunning, f.Engine = true, "1.7.1", true, "apple"
+		}, mac, true, []string{"api keys   stay on this machine"}, []string{"Except", "can be read inside"}},
+		{"a provider the gateway can't serve", func(f *Facts) { f.KeysInside = []string{"p9"} }, linux, true,
+			[]string{"api keys   stay on this machine", "Except p9, whose key goes into the sandbox: your opencode config doesn't say where its API is (options.baseURL)."},
+			[]string{"can be read inside"}},
+		{"two providers the gateway can't serve", func(f *Facts) { f.KeysInside = []string{"p8", "p9"} }, linux, true,
+			[]string{"Except p8, p9, whose key goes into the sandbox: your opencode config doesn't say where their APIs are"}, nil},
+		{"the gateway switched off", func(f *Facts) { f.Gateway, f.KeysInside = false, []string{"p9"} }, linux, true,
+			[]string{"api keys   only the chosen providers' keys, which can be read inside the sandbox (OPENCODE_SANDBOX_GATEWAY is off)"},
+			[]string{"stay on this machine", "Except"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

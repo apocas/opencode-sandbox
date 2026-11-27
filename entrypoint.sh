@@ -16,6 +16,14 @@ if [ -r "$key" ]; then
   ssh-add -q "$HOME/.ssh/sandbox_key"
 fi
 
+# Where your providers' API keys stay on your machine, opencode reaches them
+# through a gateway that the launcher starts in here right after the sandbox
+# (see gateway.pl). Wait for it, so that opencode's first request finds it.
+if [ -n "${OPENCODE_SANDBOX_GATEWAY:-}" ] &&
+  ! opencode-sandbox-gateway wait "$OPENCODE_SANDBOX_GATEWAY" 10; then
+  echo "opencode-sandbox: the gateway to your providers isn't up, so opencode can't reach them; close this sandbox and open it again" >&2
+fi
+
 # A sandbox is resumed with `docker start`, which reruns the command it was
 # created with. For the plain opencode TUI, a resumed sandbox continues its
 # last session instead of opening a blank one.

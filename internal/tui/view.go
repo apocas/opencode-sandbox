@@ -306,7 +306,19 @@ func (m *model) details(w int) string {
 	row("state", t.StatusStyled(*s))
 	row("runs in", ui.RunsIn(*s))
 	row("copied from", ui.Tilde(s.Source))
-	row("providers", ui.Providers(*s))
+	provs := s.Providers
+	if provs == "" {
+		provs = ui.Providers(*s)
+	}
+	row("providers", provs)
+	row("api keys", ui.APIKeys(*s))
+	if s.Gateway && s.State == core.StateOpen {
+		if m.gateways[s.Name] {
+			row("gateway", t.Fg(t.OK).Render("running")+t.Dim.Render(", putting the keys into its requests"))
+		} else {
+			row("gateway", t.Fg(t.Warn).Render("not running")+t.Dim.Render("; reopen to restart it"))
+		}
+	}
 	switch {
 	case s.KeyKind == "none":
 		row("ssh key", "none")

@@ -9,6 +9,7 @@ type Row struct {
 	Name, KeyKind, Key, Status, Created, Source, Providers, KeyMode string
 
 	Runtime string // the OCI runtime it was created with ("" before 0.5.0)
+	Gateway string // set if its API keys stay on this machine ("" before 0.9.0)
 	Engine  string // the Name of the engine it lives in
 	Version string // the opencode-sandbox that created it ("" before 0.1)
 }

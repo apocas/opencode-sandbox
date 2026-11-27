@@ -30,7 +30,7 @@ import (
 
 // Version is this release; images are tagged with it, so after an update the
 // next run builds the matching image by itself.
-const Version = "0.8.0"
+const Version = "0.9.0"
 
 // pidsLimit is the most processes a sandbox may run.
 const pidsLimit = 1024
@@ -74,6 +74,9 @@ type Core struct {
 	plat platform.Platform
 	// keyDirsCache holds keyDirs once looked up.
 	keyDirsCache []string
+	// cfgRoot is your opencode config as of cfgStamp (see config).
+	cfgRoot  any
+	cfgStamp string
 }
 
 // New makes a Core; OPENCODE_SANDBOX_DEBUG prints every command it runs.
@@ -250,7 +253,7 @@ func (a *Core) build(e backend.Engine, extra []string) error {
 		return err
 	}
 	defer os.RemoveAll(dir)
-	for name, mode := range map[string]os.FileMode{"Dockerfile": 0o644, "entrypoint.sh": 0o755, "ssh_config": 0o644} {
+	for name, mode := range map[string]os.FileMode{"Dockerfile": 0o644, "entrypoint.sh": 0o755, "gateway.pl": 0o755, "ssh_config": 0o644} {
 		data, err := assets.Files.ReadFile(name)
 		if err != nil {
 			return err

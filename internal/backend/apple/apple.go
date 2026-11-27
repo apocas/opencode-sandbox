@@ -198,7 +198,7 @@ func (a *Apple) Rows(label string) ([]backend.Row, error) {
 			Status:  status(c, now),
 			Created: HumanDuration(now.Sub(c.Configuration.CreationDate)) + " ago",
 			Source:  l("source"), Providers: l("providers"), KeyMode: l("keymode"), Runtime: l("runtime"),
-			Engine: "apple", Version: l("version"),
+			Engine: "apple", Version: l("version"), Gateway: l("gateway"),
 		}
 	}
 	return rows, nil
