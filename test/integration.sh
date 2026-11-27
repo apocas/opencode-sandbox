@@ -28,6 +28,8 @@ cat >"$T/two.json" <<'EOF'
 {"provider":{"p1":{"name":"One","models":{"m1":{}}},"p2":{"name":"Two","models":{"m2":{},"m3":{}}}}}
 EOF
 mkdir -p "$T/ws/sub" "$T/out" && echo hello >"$T/ws/a.txt" && echo extra >"$T/extra.txt"
+# The refusal of ~/.ssh is tested on it (CI runners have none).
+[[ -d "$HOME/.ssh" ]] || mkdir -m 700 "$HOME/.ssh"
 
 ok()   { pass=$((pass + 1)); echo "  ok    $1"; }
 bad()  { fail=$((fail + 1)); echo "  FAIL  $1"; [[ -z "${2:-}" ]] || sed 's/^/        | /' <<<"$2" | tail -15; }
