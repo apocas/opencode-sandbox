@@ -14,6 +14,7 @@ func base(goos string) Facts {
 		Version: "0.5.0", GOOS: goos, Machine: "amd64", Home: "/home/u", DockerCLI: true, Engine: "docker",
 		Image: "opencode-sandbox:0.5.0", ImageOK: true,
 		Config: "/home/u/.config/opencode/opencode.json", Providers: 2, PidsLimit: 1024, Gateway: true,
+		Limits: "4 GB of memory, 4 CPUs",
 	}
 }
 
@@ -49,7 +50,7 @@ func TestReport(t *testing.T) {
 		{"mac with Docker Desktop", nil, mac, true,
 			[]string{"on macOS 26.1 (Apple silicon)", "ok         Docker 29.9.3 (Docker Desktop)", "image opencode-sandbox:0.5.0 in Docker",
 				"~/.config/opencode/opencode.json, 2 providers", "Docker Desktop's Linux VM, shared",
-				"only a disposable key", "seccomp, at most 1024 processes",
+				"only a disposable key", "seccomp; at most 1024 processes, 4 GB of memory, 4 CPUs (set others with `opencode-sandbox new --memory 8g",
 				"used       Docker Desktop: one Linux VM", "install    Apple container",
 				"`opencode-sandbox setup` installs it", "new sandboxes then use it",
 				"Next step", "run        `opencode-sandbox setup` sets up Apple container: each new sandbox gets a lightweight VM of its own",
@@ -61,7 +62,8 @@ func TestReport(t *testing.T) {
 		}, mac, true,
 			[]string{"ok         Apple container 1.7.1", "image opencode-sandbox:0.5.0 in Apple container",
 				"boundary   a lightweight VM of its own", "only a disposable key", "VM of its own, which can't reach",
-				"each has a network of its own", "the VM stands in for them",
+				"each has a network of its own", "the VM has 4 GB of memory, 4 CPUs (set others with `opencode-sandbox new --memory 8g --cpus 6`)",
+				"the VM stands in for them",
 				"available  Docker Desktop: one Linux VM for all your containers; set OPENCODE_SANDBOX_ENGINE=docker to use it",
 				"used       Apple container 1.7.1"},
 			[]string{"  install    ", "seccomp", "Docker Desktop's Linux VM, shared", "Next step"}},
@@ -134,6 +136,11 @@ func TestReport(t *testing.T) {
 			f.Runtime, f.RuntimeEnv = "runsc", "runsc"
 		}, linux, true,
 			[]string{"used       gVisor", "stays on this machine"}, []string{"host-uds", "Next step", "ssh-agent, for keys"}},
+		{"limits that can't be read", func(f *Facts) {
+			f.Limits, f.LimitsErr = "", `OPENCODE_SANDBOX_MEMORY: "lots" isn't an amount of memory; say it like 8g or 512m`
+		}, linux, false, []string{`no         OPENCODE_SANDBOX_MEMORY: "lots" isn't an amount of memory`}, nil},
+		{"a Docker that can't limit memory or CPUs", func(f *Facts) { f.Limits = "no memory or CPU limit" }, linux, true,
+			[]string{"at most 1024 processes, no memory or CPU limit"}, nil},
 		{"unknown runtime chosen", func(f *Facts) {
 			f.RuntimeErr = "OPENCODE_SANDBOX_RUNTIME=nope, but Docker has no runtime by that name (it has: runc)"
 		}, linux, false, []string{"no         OPENCODE_SANDBOX_RUNTIME=nope"}, nil},

@@ -150,6 +150,8 @@ type named struct {
 
 func (n named) Name() string { return n.name }
 
+func (n named) Info() (backend.Info, error) { return backend.Info{}, nil }
+
 func TestPlace(t *testing.T) {
 	for _, v := range []string{"OPENCODE_SANDBOX_ENGINE", "OPENCODE_SANDBOX_RUNTIME", "OPENCODE_SANDBOX_NO_AGENT"} {
 		t.Setenv(v, "")

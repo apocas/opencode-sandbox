@@ -221,7 +221,7 @@ grep -q 'Folder to copy' <<<"$out" && grep -q 'no sandbox created' <<<"$out" \
 [[ "$(names | grep -c '^it-')" == 4 ]] && ok "the form created nothing" || bad "the form created nothing" "$("$BIN" ls)"
 
 echo "== the gateway, and closing the terminal"
-pty "" "$BIN" new -n it-h -k none >/dev/null 2>&1 &
+pty "" "$BIN" new -n it-h -k none --memory 2g --cpus 2 >/dev/null 2>&1 &
 job=$!
 for _ in $(seq 60); do [[ "$(state opencode-sandbox-it-h)" == running ]] && break; sleep 1; done
 # The sandbox's opencode config and what it was started with: the real key is
@@ -248,6 +248,14 @@ out="$(xc it-h sh -c "curl -sS -m 20 -o /dev/null -H 'Authorization: Bearer nope
 [[ "$out" == "400 404 405" ]] && grep -q '"Bearer nope"' "$T/provider.log" && ! grep -q "$REAL_KEY" "$T/provider.log" \
   && ok "the key goes nowhere else" || bad "the key goes nowhere else" "$out"$'\n'"$(cat "$T/provider.log")"
 pgrep -f -- "$BIN --internal-gateway it-h" >/dev/null && ok "its gateway runs while it's open" || bad "its gateway runs while it's open"
+# Its limits (2 GB, 2 CPUs), seen from inside: what its cgroup may use
+# (Docker), or all there is where it has a kernel of its own (gVisor, a VM).
+out="$(xc it-h sh -c 'cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null
+  awk "/MemTotal/ { print \$2 }" /proc/meminfo; echo; cat /sys/fs/cgroup/cpu.max 2>/dev/null; nproc' 2>&1)"
+mem="${out%%$'\n\n'*}" cpu="${out#*$'\n\n'}" held=0
+for v in $mem; do [[ "$v" =~ ^[0-9]+$ ]] && (( v == 2147483648 || (v > 1048576 && v <= 2097152) )) && held=1; done
+(( held )) && ok "inside, it has no more memory than its limit" || bad "inside, it has no more memory than its limit" "$out"
+grep -qxE '200000 100000|2' <<<"$cpu" && ok "nor more CPUs" || bad "nor more CPUs" "$out"
 pid="$(pgrep -f -- "$BIN new -n it-h" | head -1)"
 if [[ -n "$pid" ]]; then
   kill -HUP "$pid"
@@ -330,6 +338,45 @@ else
   refuse "a runtime Docker hasn't" '--runtime nope, but Docker has no runtime by that name' "$BIN" new "$T/ws" -n it-x --runtime nope -k none
 fi
 
+echo "== limits"
+# What the engine holds a sandbox to: memory in MiB, then CPUs.
+limits() {
+  if [[ "$ENGINE" == apple ]]; then
+    container inspect "opencode-sandbox-$1" | python3 -c 'import json, sys
+r = json.load(sys.stdin)[0]["configuration"]["resources"]
+print(r["memoryInBytes"] >> 20, r["cpus"])'
+  else
+    docker inspect -f '{{.HostConfig.Memory}} {{.HostConfig.NanoCpus}}' "opencode-sandbox-$1" | awk '{ print $1 / 1048576, $2 / 1e9 }'
+  fi
+}
+# What the engine has, and so what a sandbox gets by itself: 4 GB and 4
+# CPUs, or all there is where that's less.
+if [[ "$ENGINE" == apple ]]; then
+  HAS_CPUS="$(sysctl -n hw.ncpu)" HAS_MB="$(( $(sysctl -n hw.memsize) / 1048576 ))"
+else
+  read -r HAS_CPUS HAS_MB < <(docker info --format '{{.NCPU}} {{.MemTotal}}' | awk '{ print $1, int($2 / 1048576) }')
+fi
+USUAL="$(( HAS_MB < 4096 ? HAS_MB : 4096 )) $(( HAS_CPUS < 4 ? HAS_CPUS : 4 ))"
+[[ "$(limits it-r)" == "$USUAL" ]] && ok "a sandbox may use 4 GB and 4 CPUs, or all its engine has ($USUAL)" || bad "the usual limits ($USUAL)" "$(limits it-r)"
+check "the limits asked for" 'opencode v?[0-9]' "$BIN" new "$T/ws" -n it-l -k none --memory 1g --cpus 1 -- --version
+[[ "$(limits it-l)" == "1024 1" ]] && ok "the engine holds it to them" || bad "the engine holds it to them" "$(limits it-l)"
+if [[ "$ENGINE" != apple ]]; then
+  # No swap to spill into: memory and swap together are capped at the same.
+  [[ "$(docker inspect -f '{{.HostConfig.MemorySwap}}' opencode-sandbox-it-l)" == 1073741824 ]] && ok "and it has no swap" || bad "and it has no swap"
+fi
+# More than there is: all there is, and it says so.
+out="$("$BIN" new "$T/ws" -n it-u -k none --memory 4096g --cpus 4096 -- --version 2>&1 </dev/null)"
+grep -q "has $HAS_CPUS CPUs, so that is this sandbox's limit, not 4096" <<<"$out" && grep -q "of memory, so that is this sandbox's limit, not 4096 GB" <<<"$out" \
+  && ok "more than the engine has is said to be less" || bad "more than the engine has is said to be less" "$out"
+[[ "$(limits it-u)" == "$HAS_MB $HAS_CPUS" ]] && ok "and is all the engine has" || bad "and is all the engine has" "$(limits it-u)"
+# (health wraps its lines: read it as one.)
+flat() { "$@" 2>&1 | tr -s ' \n' ' '; }
+OPENCODE_SANDBOX_MEMORY=2g OPENCODE_SANDBOX_CPUS=1 check "health names the limits of new sandboxes" '2 GB of memory, 1 CPU \(' flat "$BIN" health
+refuse "memory without a unit" "isn't an amount of memory; say it like 8g or 512m" "$BIN" new "$T/ws" -n it-x -k none --memory 8
+refuse "too little memory" 'opencode needs at least 512m' "$BIN" new "$T/ws" -n it-x -k none --memory 100m
+refuse "half a CPU" '--cpus must be a whole number of CPUs' "$BIN" new "$T/ws" -n it-x -k none --cpus 0.5
+OPENCODE_SANDBOX_CPUS=many refuse "limits in the environment that can't be read" 'OPENCODE_SANDBOX_CPUS must be a whole number' "$BIN" new "$T/ws" -n it-x -k none
+
 echo "== delete"
 out="$("$BIN" rm it-a it-b it-nope 2>&1)"
 grep -q 'removed it-a and its disposable key SHA256' <<<"$out" && grep -q "no sandbox named 'it-nope'" <<<"$out" \
@@ -341,7 +388,7 @@ if (( ALL )); then
   check "ls empty again" 'no sandboxes' "$BIN" ls
 else
   skip "rm --all -y"
-  check "rm the rest by name" 'removed it-c' "$BIN" rm it-c it-d it-h it-q it-k it-e it-f it-g it-m it-o it-r it-s it-z
+  check "rm the rest by name" 'removed it-c' "$BIN" rm it-c it-d it-h it-q it-k it-e it-f it-g it-m it-o it-r it-s it-z it-l it-u
   none "ls has none of the test's again"
 fi
 

@@ -19,7 +19,8 @@ import (
 func sample() []core.Sandbox {
 	return []core.Sandbox{
 		{Name: "api-7f3a", State: core.StateOpen, Status: "open (5 minutes)", Created: "2 hours ago", Engine: "apple", RunsIn: "apple",
-			KeyKind: "disposable", KeyName: "disposable", KeyInside: true, Providers: "my-provider", Gateway: true, Source: "/src/api", Version: core.Version},
+			KeyKind: "disposable", KeyName: "disposable", KeyInside: true, Providers: "my-provider", Gateway: true, Source: "/src/api", Version: core.Version,
+			Limits: core.Limits{MemoryMB: 4096, CPUs: 4}},
 		{Name: "web-12bc", State: core.StateClosed, Status: "closed 2 hours ago", Created: "3 days ago", Engine: "docker", RunsIn: "gvisor",
 			KeyKind: "home", Key: "/h/.ssh/id_ed25519", KeyName: "id_ed25519", Providers: "anthropic,openai", APIKeysInside: true, Source: "/src/web", Version: "0.4.0"},
 		{Name: "infra", State: core.StateNew, Status: "new", Created: "just now", Engine: "docker", RunsIn: "docker",
@@ -63,7 +64,8 @@ func TestListAndDetails(t *testing.T) {
 	}
 	details := strings.Join(strings.Fields(ansi.Strip(m.details(46))), " ")
 	for _, want := range []string{"a VM of its own (Apple container)", "disposable, stored inside the sandbox", "s shell · open in another terminal",
-		"api keys on this machine, behind a gateway", "gateway not running; reopen to restart it"} {
+		"api keys on this machine, behind a gateway", "gateway not running; reopen to restart it",
+		"limits 4 GB of memory, 4 CPUs"} {
 		if !strings.Contains(details, want) {
 			t.Errorf("details: missing %q in %q", want, details)
 		}
@@ -81,6 +83,10 @@ func TestListAndDetails(t *testing.T) {
 		if got := ui.APIKeys(ss[i]); got != want.words {
 			t.Errorf("%s: API keys %q, want %q", ss[i].Name, got, want.words)
 		}
+	}
+	// A sandbox without limits says what that means.
+	if got := ui.Limits(ss[1]); !strings.HasPrefix(got, "none: it may use all the memory and CPUs of its engine") {
+		t.Errorf("%s: limits %q", ss[1].Name, got)
 	}
 	ss[0].APIKeysInside = true
 	if got := ui.APIKeys(ss[0]); !strings.Contains(got, "inside the sandbox for a provider") || !strings.Contains(got, "the rest on this machine") {
@@ -521,7 +527,8 @@ func TestFormMoreOptions(t *testing.T) {
 	// Through the first page: folder, name, key, a provider.
 	walk(enter, enter, enter, tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}, enter)
 	out = screen(t, m, 110, 32)
-	for _, want := range []string{"New sandbox: more options", "Network", "open", "none", "only its providers, through the gateway", "Runs in", "API keys", "on this machine", "inside the sandbox"} {
+	for _, want := range []string{"New sandbox: more options", "Network", "open", "none", "only its providers, through the gateway", "Runs in", "API keys", "on this machine", "inside the sandbox",
+		"Memory", "the most it may use, like 8g or 512m", "CPUs"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the second page lacks %q:\n%s", want, out)
 		}
@@ -538,8 +545,24 @@ func TestFormMoreOptions(t *testing.T) {
 		t.Errorf("what's asked for without a network: %+v", o)
 	}
 	m.nf.gateway = "off"
-	if o := m.nf.options("x"); o.Gateway != "off" {
+	if o := m.nf.options("x"); o.Gateway != "off" || o.Memory != "" || o.CPUs != "" {
 		t.Errorf("gateway off: %+v", o)
+	}
+	// Its limits, as typed; what can't be one is refused in the field's words.
+	m.nf.memory, m.nf.cpus = " 8g ", "6"
+	if o := m.nf.options("x"); o.Memory != "8g" || o.CPUs != "6" {
+		t.Errorf("limits: %+v", o)
+	}
+	for in, want := range map[string]string{"8": `"8" isn't an amount of memory; say it like 8g or 512m`, "100m": "opencode needs at least 512m, and 100m is less"} {
+		if err := limitError(core.CheckLimits(in, "")); err == nil || err.Error() != want {
+			t.Errorf("memory %q: %v, want %q", in, err, want)
+		}
+	}
+	if err := limitError(core.CheckLimits("", "half")); err == nil || err.Error() != `must be a whole number of CPUs, 1 or more, not "half"` {
+		t.Errorf("CPUs: %v", err)
+	}
+	if err := limitError(core.CheckLimits("", "")); err != nil {
+		t.Errorf("fields left empty: %v", err)
 	}
 	// Where it runs, as the form holds it.
 	for v, want := range map[string][2]string{"|": {"", ""}, "apple|": {"apple", ""}, "docker|runsc-ssh": {"docker", "runsc-ssh"}} {

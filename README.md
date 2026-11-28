@@ -93,8 +93,10 @@ down:
   the provider. The agent can *use* your provider while the sandbox is open,
   but can't read or copy its key ([API keys](#api-keys)).
 - **Hardened container.** Non-root user, read-only root filesystem, all
-  capabilities dropped, no setuid programs, `no-new-privileges`, a PID limit,
-  and a network on which sandboxes can't reach each other.
+  capabilities dropped, no setuid programs, `no-new-privileges`, a network on
+  which sandboxes can't reach each other, and a cap on processes, memory and
+  CPUs, so a runaway build can't starve your machine
+  ([Memory and CPUs](#memory-and-cpus)).
 - **Stronger boundaries where you have them.** On a Mac with Apple's
   [`container`](https://github.com/apple/container), every sandbox runs in a
   lightweight VM of its own. On Linux, sandboxes can run on
@@ -195,6 +197,29 @@ address ([API keys](#api-keys)); and the gateway can't be off.
 `OPENCODE_SANDBOX_NETWORK=none` makes it the default for new sandboxes. `ls`
 shows each sandbox's network; it can't be changed afterwards.
 
+## Memory and CPUs
+
+A sandbox may use up to 4 GB of memory and 4 CPUs, and run up to 1024
+processes. A build that eats memory, or a fork bomb, is stopped inside the
+sandbox instead of starving your machine. For one sandbox that needs more, or
+should get less:
+
+```bash
+opencode-sandbox new --memory 8g --cpus 6
+```
+
+`OPENCODE_SANDBOX_MEMORY` and `OPENCODE_SANDBOX_CPUS` do the same for every
+new one. A sandbox never gets more than its engine has (Docker Desktop's VM,
+say): ask for more and it gets all of that, and is told so. What goes over the
+memory limit is stopped by the kernel; in Docker there's no swap to spill
+into. In Apple container, the limits are the size of the sandbox's VM. The
+dashboard shows each sandbox's limits; they can't be changed afterwards, and
+Docker sandboxes made before 0.12.0 have none.
+
+Disk isn't capped: a sandbox's home and `/workspace` can fill the disk that
+Docker's or Apple container's volumes are on. Its `/tmp` is in memory, 1 GB at
+most.
+
 ## Isolation
 
 What separates a sandbox from your machine depends on what runs it.
@@ -223,7 +248,8 @@ Docker for new ones.
 
 What's different there:
 
-- Each sandbox is a VM with 4 GB of memory and 4 CPUs, on a network of its own.
+- Each sandbox is a VM as large as its [limits](#memory-and-cpus) (4 GB of
+  memory and 4 CPUs, unless you say otherwise), on a network of its own.
 - No detaching: `ctrl-]` `ctrl-]` does nothing, and an open sandbox can't be
   opened from a second terminal (`--shell` works).
 - There's no `no-new-privileges` or PID limit; the image has no setuid programs
@@ -467,9 +493,11 @@ opencode-sandbox new [DIR] [-n NAME] [-k KEY] [-p PROVIDER] [OPTIONS] [-- ARGS..
 | `--engine docker\|apple` | where it runs (default: Apple container where that runs, else Docker) |
 | `--runtime NAME` | the Docker runtime it runs on, e.g. `runc` (default: gVisor where Docker has it; see [Isolation](#isolation)) |
 | `--gateway on\|off` | `on` (the default): its providers' API keys stay on your machine. `off`: they go into its config ([API keys](#api-keys)) |
+| `--memory AMOUNT` | the most memory it may use, like `8g` or `512m` (default: `4g`; see [Memory and CPUs](#memory-and-cpus)) |
+| `--cpus N` | the most CPUs it may use (default: 4) |
 | `-- ARGS` | passed to opencode |
 
-The last four have defaults you can set in the [environment](#configuration);
+The last six have defaults you can set in the [environment](#configuration);
 in the dashboard's form, `ctrl-o` asks them.
 
 | Command | |
@@ -604,6 +632,9 @@ In the sandbox:
 - **Other secrets in your opencode config are copied as they are**, such as an
   MCP server's token. Only a provider's `options.apiKey` and `options.headers`
   stay behind the gateway.
+- **A sandbox can fill your disk.** Memory, CPUs and processes are capped
+  ([Memory and CPUs](#memory-and-cpus)); what it writes to its home and
+  `/workspace` isn't.
 - **A sandbox's home persists until you delete it.** Something planted there runs
   again when you resume that sandbox.
 - **Prompt injection.** Text in files or command output can try to steer the
@@ -620,6 +651,8 @@ In the sandbox:
 | `OPENCODE_SANDBOX_NO_AGENT` | `1` to use the no-agent mode ([Platforms](#platforms)) even where a host ssh-agent would work |
 | `OPENCODE_SANDBOX_GATEWAY` | `off` to give new sandboxes their providers' API keys instead of a gateway ([API keys](#api-keys)) |
 | `OPENCODE_SANDBOX_NETWORK` | `none` to give new sandboxes no network ([Network](#network)) |
+| `OPENCODE_SANDBOX_MEMORY` | the most memory a new sandbox may use, like `8g` (default `4g`; see [Memory and CPUs](#memory-and-cpus)) |
+| `OPENCODE_SANDBOX_CPUS` | the most CPUs a new sandbox may use (default 4) |
 | `OPENCODE_SANDBOX_SEED_HOSTS` | space-separated hosts whose keys are copied from `~/.ssh/known_hosts` into sandboxes; read when `known_hosts` is created, delete it to re-seed |
 | `OPENCODE_SANDBOX_ENGINE` | `docker` or `apple`: where new sandboxes go (default: Apple container where it runs, else Docker) |
 | `OPENCODE_SANDBOX_RUNTIME` | a Docker runtime for new sandboxes, e.g. `runc` (default: gVisor where Docker has it, else Docker's own default; see [Isolation](#isolation)) |

@@ -70,7 +70,7 @@ func (d *Docker) Rows(label string) ([]backend.Row, error) {
 		l(label), l("opencode-sandbox.keykind"), l("opencode-sandbox.key"), "{{.Status}}", "{{.RunningFor}}",
 		l("opencode-sandbox.source"), l("opencode-sandbox.providers"), l("opencode-sandbox.keymode"),
 		l("opencode-sandbox.runtime"), l("opencode-sandbox.version"), l("opencode-sandbox.gateway"),
-		l("opencode-sandbox.network"),
+		l("opencode-sandbox.network"), l("opencode-sandbox.memory"), l("opencode-sandbox.cpus"),
 	}, "\t")
 	out, err := d.output("ps", "-a", "--filter", "label="+label, "--format", format)
 	if err != nil {
@@ -78,10 +78,11 @@ func (d *Docker) Rows(label string) ([]backend.Row, error) {
 	}
 	var rows []backend.Row
 	for _, line := range lines(out) {
-		f := append(strings.Split(line, "\t"), make([]string, 12)...)
+		f := append(strings.Split(line, "\t"), make([]string, 14)...)
 		rows = append(rows, backend.Row{
 			Name: f[0], KeyKind: f[1], Key: f[2], Status: f[3], Created: f[4],
 			Source: f[5], Providers: f[6], KeyMode: f[7], Runtime: f[8], Engine: "docker", Version: f[9], Gateway: f[10], Network: f[11],
+			Memory: f[12], CPUs: f[13],
 		})
 	}
 	return rows, nil
@@ -152,6 +153,17 @@ func CreateArgs(s backend.Spec) []string {
 	}
 	if s.PidsLimit > 0 {
 		a = append(a, "--pids-limit", strconv.Itoa(s.PidsLimit))
+	}
+	if s.MemoryMB > 0 {
+		m := strconv.Itoa(s.MemoryMB) + "m"
+		a = append(a, "--memory", m)
+		if s.NoSwap {
+			// Memory and swap together are capped at the same: no swap.
+			a = append(a, "--memory-swap", m)
+		}
+	}
+	if s.CPUs > 0 {
+		a = append(a, "--cpus", strconv.Itoa(s.CPUs))
 	}
 	for _, t := range s.Tmpfs {
 		a = append(a, "--tmpfs", t)
@@ -226,9 +238,12 @@ func (d *Docker) ExecArgv(c string, tty bool, detachKeys string, cmd ...string) 
 	return append([]string{"docker", "exec", t, "--detach-keys", detachKeys, c}, cmd...)
 }
 
-// infoFormat makes docker info print the fields Info needs as JSON.
+// infoFormat makes docker info print the fields Info needs as JSON. (The
+// names are the Go fields', which is why the last differs from its key.)
 const infoFormat = `{"OS":{{json .OperatingSystem}},"Version":{{json .ServerVersion}},` +
-	`"SecurityOptions":{{json .SecurityOptions}},"Runtimes":{{json .Runtimes}},"DefaultRuntime":{{json .DefaultRuntime}}}`
+	`"SecurityOptions":{{json .SecurityOptions}},"Runtimes":{{json .Runtimes}},"DefaultRuntime":{{json .DefaultRuntime}},` +
+	`"NCPU":{{json .NCPU}},"MemTotal":{{json .MemTotal}},` +
+	`"MemoryLimit":{{json .MemoryLimit}},"SwapLimit":{{json .SwapLimit}},"CpuCfsQuota":{{json .CPUCfsQuota}}}`
 
 func (d *Docker) Info() (backend.Info, error) {
 	var out bytes.Buffer
@@ -247,6 +262,9 @@ func parseInfo(data []byte) (backend.Info, error) {
 			Path string   `json:"path"`
 			Args []string `json:"runtimeArgs"`
 		}
+		NCPU                                int
+		MemTotal                            int64
+		MemoryLimit, SwapLimit, CpuCfsQuota bool
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return backend.Info{}, fmt.Errorf("can't read docker info: %w", err)
@@ -256,7 +274,9 @@ func parseInfo(data []byte) (backend.Info, error) {
 		return backend.Info{}, errors.New("can't reach Docker")
 	}
 	info := backend.Info{OS: raw.OS, Version: raw.Version, SecurityOptions: raw.SecurityOptions,
-		DefaultRuntime: raw.DefaultRuntime, Runtimes: map[string]backend.Runtime{}}
+		DefaultRuntime: raw.DefaultRuntime, Runtimes: map[string]backend.Runtime{},
+		CPUs: raw.NCPU, MemoryMB: int(raw.MemTotal >> 20),
+		NoMemoryLimit: !raw.MemoryLimit, NoSwapLimit: !raw.SwapLimit, NoCPULimit: !raw.CpuCfsQuota}
 	for name, rt := range raw.Runtimes {
 		info.Runtimes[name] = backend.Runtime{Path: rt.Path, Args: rt.Args}
 	}

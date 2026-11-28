@@ -4,6 +4,32 @@ All notable changes to opencode-sandbox. Versions follow
 [Semantic Versioning](https://semver.org); each release is tagged `vX.Y.Z`.
 To update, see [Updating](README.md#updating).
 
+## [0.12.0] - 2026-11-28
+
+### Added
+
+- **A sandbox has a cap on memory and CPUs.** New sandboxes may use up to
+  4 GB of memory and 4 CPUs, so a build that eats memory or spins every core
+  is held inside the sandbox instead of starving your machine. Docker
+  sandboxes had no such cap before; in Apple container it's the size of the
+  sandbox's VM, which was fixed at the same. `opencode-sandbox new --memory 8g
+  --cpus 6` sets them for one sandbox, `OPENCODE_SANDBOX_MEMORY` and
+  `OPENCODE_SANDBOX_CPUS` for new ones, and the dashboard's form asks them
+  with its other options (`ctrl-o`). See
+  [Memory and CPUs](README.md#memory-and-cpus).
+- A sandbox never gets more than its engine has: where Docker Desktop's VM
+  has 2 CPUs, say, it gets 2, and is told so if it asked for more. In Docker
+  the memory cap covers swap too, where Docker can do that.
+- The dashboard's details show each sandbox's limits, and `health` the ones
+  new sandboxes get. Where Docker can't hold a container to a limit (no
+  cgroup controller for it), `health` says so.
+
+### Notes
+
+- Existing sandboxes keep what they have: Docker ones no cap, Apple container
+  ones 4 GB and 4 CPUs.
+- Disk isn't capped; the README's limits say so.
+
 ## [0.11.1] - 2026-11-28
 
 ### Fixed
@@ -372,6 +398,7 @@ First release.
   `--resume` warns about sandboxes created by an older version.
 - Bundles opencode 2.4.2 (x86_64 and arm64 builds, checksums verified).
 
+[0.12.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.12.0
 [0.11.1]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.11.1
 [0.11.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.11.0
 [0.10.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.10.0

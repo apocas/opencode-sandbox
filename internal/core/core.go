@@ -30,7 +30,7 @@ import (
 
 // Version is this release; images are tagged with it, so after an update the
 // next run builds the matching image by itself.
-const Version = "0.11.1"
+const Version = "0.12.0"
 
 // pidsLimit is the most processes a sandbox may run.
 const pidsLimit = 1024
@@ -383,8 +383,23 @@ func (a *Core) build(e backend.Engine, extra []string) error {
 // Health finds out what --health reports. It works before Setup, and when
 // Setup fails.
 func (a *Core) Health() health.Facts {
-	f := health.Gather(a.r, a.docker, &apple.Apple{R: a.r}, Version, image())
+	ap := &apple.Apple{R: a.r}
+	f := health.Gather(a.r, a.docker, ap, Version, image())
 	f.PidsLimit = pidsLimit
+	var info backend.Info
+	switch {
+	case f.Engine == "docker" && f.Docker != nil:
+		info = *f.Docker
+	case f.Engine == "apple":
+		info, _ = ap.Info()
+	}
+	if f.Engine != "" {
+		if l, _, err := limitsFor(f.Engine, info, "", ""); err != nil {
+			f.LimitsErr = err.Error()
+		} else {
+			f.Limits = l.String()
+		}
+	}
 	return f
 }
 

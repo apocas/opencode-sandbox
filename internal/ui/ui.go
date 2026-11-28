@@ -163,6 +163,14 @@ func NetworkWords(s core.Sandbox) string {
 	return "open: the internet, your network and services on this machine"
 }
 
+// Limits says in words the memory and CPUs a sandbox may use.
+func Limits(s core.Sandbox) string {
+	if s.Limits == (core.Limits{}) {
+		return "none: it may use all the memory and CPUs of its engine (made before 0.12.0, or the engine can't limit them)"
+	}
+	return s.Limits.String()
+}
+
 // RunsIn says in words what a sandbox runs in.
 func RunsIn(s core.Sandbox) string {
 	switch s.RunsIn {

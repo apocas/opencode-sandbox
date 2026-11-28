@@ -35,6 +35,10 @@ type sandbox struct {
 	gateway bool
 	// network is "open" or "none" (see CreateOptions).
 	network string
+	// limits are the memory and CPUs it may use; noSwap: the engine can keep
+	// memory over the limit out of swap.
+	limits Limits
+	noSwap bool
 	// e and plat are where it runs, and what follows from that.
 	e                   backend.Engine
 	plat                platform.Platform
@@ -65,6 +69,10 @@ type CreateOptions struct {
 	// "off" (they go into its config). "" leaves it to the environment
 	// (OPENCODE_SANDBOX_GATEWAY), then on.
 	Gateway string
+	// Memory ("8g", "512m") and CPUs ("6") are the most it may use. ""
+	// leaves each to the environment (MemoryEnv, CPUsEnv), then to 4 GB and
+	// 4 CPUs; either way no more than the engine has.
+	Memory, CPUs string
 }
 
 // NetworkEnv set to "none" gives new sandboxes no network.
@@ -122,6 +130,11 @@ func (a *Core) Create(o CreateOptions) (*Created, error) {
 	if err != nil {
 		return nil, err
 	}
+	info := a.info(e)
+	limits, less, err := limitsFor(e.Name(), info, o.Memory, o.CPUs)
+	if err != nil {
+		return nil, err
+	}
 	if network == "none" {
 		// Its providers are all it reaches, and only through the gateway.
 		switch {
@@ -149,7 +162,8 @@ func (a *Core) Create(o CreateOptions) (*Created, error) {
 	if err := a.CheckName(name); err != nil {
 		return nil, err
 	}
-	sb := &sandbox{name: name, workspace: workspace, gateway: gw, network: network, e: e, plat: plat}
+	sb := &sandbox{name: name, workspace: workspace, gateway: gw, network: network, e: e, plat: plat,
+		limits: limits, noSwap: !info.NoSwapLimit}
 	if o.Key == "" {
 		return nil, errors.New("no SSH key chosen; pass -k NAME, -k new or -k none")
 	}
@@ -183,6 +197,9 @@ func (a *Core) Create(o CreateOptions) (*Created, error) {
 		}
 	}()
 	a.Rep.Step(fmt.Sprintf("Creating sandbox '%s'", name))
+	for _, n := range less {
+		a.note("%s", n)
+	}
 	if err := a.writeConfig(e, name, sb.providers, sb.gateway, network == "none"); err != nil {
 		return nil, err
 	}
@@ -456,7 +473,9 @@ func (a *Core) createContainer(e backend.Engine, sb *sandbox, opencodeArgs []str
 		// escalation, and only the variables below. Your host SSH_AUTH_SOCK
 		// is NOT passed through. /tmp needs exec: opencode's TUI unpacks a
 		// native .so there and loads it.
+		// And no more memory, CPUs or processes than its limits.
 		Init: true, ReadOnlyRoot: true, DropAllCaps: true, NoNewPrivileges: true, PidsLimit: pidsLimit,
+		MemoryMB: sb.limits.MemoryMB, CPUs: sb.limits.CPUs, NoSwap: sb.noSwap,
 		Tmpfs:   []string{"/tmp:exec,size=1g,mode=1777"},
 		Network: state.Network, NoNetwork: sb.network == "none",
 		Runtime: sb.plat.Runtime,
@@ -468,6 +487,12 @@ func (a *Core) createContainer(e backend.Engine, sb *sandbox, opencodeArgs []str
 		},
 		Image: image(),
 		Cmd:   append([]string{"opencode"}, opencodeArgs...),
+	}
+	if sb.limits.MemoryMB > 0 {
+		s.Labels = append(s.Labels, [2]string{state.Label("memory"), MemoryArg(sb.limits.MemoryMB)})
+	}
+	if sb.limits.CPUs > 0 {
+		s.Labels = append(s.Labels, [2]string{state.Label("cpus"), strconv.Itoa(sb.limits.CPUs)})
 	}
 	if sb.gateway {
 		// entrypoint.sh waits for the gateway there before opencode starts.

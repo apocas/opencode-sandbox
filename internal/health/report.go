@@ -105,6 +105,9 @@ func setup(p *printer, f Facts) bool {
 	if f.RuntimeErr != "" {
 		fail(f.RuntimeErr)
 	}
+	if f.LimitsErr != "" {
+		fail(f.LimitsErr)
+	}
 
 	cfg := f.tilde(f.Config)
 	switch f.ConfigErr {
@@ -144,7 +147,7 @@ func appleIsolation(p *printer, f Facts) {
 	p.item("ssh keys", sshKeys(f, "only a disposable key or none, stored inside the sandbox, where anything running there can copy it: "+f.Agent.NoAgentWhy))
 	p.item("api keys", apiKeys(f))
 	p.item("network", network(f, "open: the internet, your local network and services on this Mac, but not other sandboxes (each has a network of its own)"))
-	p.item("hardening", "non-root user, read-only root filesystem, no capabilities; the VM has 4 GB of memory and 4 CPUs. Apple container has no no-new-privileges or process limit; the VM stands in for them.")
+	p.item("hardening", "non-root user, read-only root filesystem, no capabilities; the VM has "+limits(f)+". Apple container has no no-new-privileges or process limit; the VM stands in for them.")
 }
 
 // isolation describes what a sandbox created now gets.
@@ -172,11 +175,22 @@ func isolation(p *printer, f Facts) {
 	if seccomp(f) {
 		h += ", seccomp"
 	}
-	h += fmt.Sprintf(", at most %d processes; no memory or CPU limit", f.PidsLimit)
+	h += fmt.Sprintf("; at most %d processes, %s", f.PidsLimit, limits(f))
 	if !seccomp(f) {
 		h += "; no seccomp filter, as Docker's is switched off"
 	}
 	p.item("hardening", h)
+}
+
+// limits says the memory and CPUs a new sandbox may use.
+func limits(f Facts) string {
+	switch {
+	case f.Limits == "":
+		return "no memory or CPU limit"
+	case strings.Contains(f.Limits, "no "):
+		return f.Limits + " (Docker here can't hold a container to one)"
+	}
+	return f.Limits + " (set others with `opencode-sandbox new --memory 8g --cpus 6`)"
 }
 
 // sshKeys says which SSH keys a new sandbox may get: none without a network.

@@ -29,6 +29,9 @@ type newForm struct {
 	// network is "open" or "none", place where it runs (see placeOf), and
 	// gateway "on" or "off": what CreateOptions takes.
 	network, place, gateway string
+	// memory ("8g") and cpus ("6") are the most it may use; each empty for
+	// what new sandboxes get.
+	memory, cpus string
 
 	mu   sync.Mutex
 	dots map[string]core.DotFiles // the dot files of each folder looked at
@@ -184,7 +187,8 @@ func (m *model) startForm() tea.Cmd {
 // options are what the form asks Create for, for a sandbox by that name.
 func (nf *newForm) options(name string) core.CreateOptions {
 	o := core.CreateOptions{Workspace: expand(nf.folder), Name: name, Key: nf.key, Providers: nf.providers,
-		Network: nf.network, Gateway: nf.gateway}
+		Network: nf.network, Gateway: nf.gateway,
+		Memory: strings.TrimSpace(nf.memory), CPUs: strings.TrimSpace(nf.cpus)}
 	if nf.empty() {
 		o.Workspace, o.Empty = "", true
 	}
@@ -203,7 +207,8 @@ func placeOf(v string) (engine, rt string) {
 }
 
 // moreFields are the options that have defaults: what the sandbox can
-// reach, where it runs and where its providers' API keys are.
+// reach, where it runs, where its providers' API keys are, and how much
+// memory and how many CPUs it may use.
 func moreFields(m *model, nf *newForm) []huh.Field {
 	c, dim := m.c, m.t.Dim.Render
 	var places []huh.Option[string]
@@ -214,6 +219,11 @@ func moreFields(m *model, nf *newForm) []huh.Field {
 		places = append(places, huh.NewOption("automatic", "|"))
 	}
 	nf.place = "|"
+	// What a sandbox gets in the place picked when the field is left empty.
+	usual := func() core.Limits {
+		l, _ := c.LimitsFor(placeOf(nf.place))
+		return l
+	}
 	return []huh.Field{
 		huh.NewSelect[string]().Title("Network").
 			Description("what the sandbox can reach").
@@ -252,7 +262,40 @@ func moreFields(m *model, nf *newForm) []huh.Field {
 				}
 				return nil
 			}),
+		huh.NewInput().Title("Memory").
+			Description("the most it may use, like 8g or 512m; never more than where it runs has").
+			PlaceholderFunc(func() string {
+				if l := usual(); l.MemoryMB > 0 {
+					return core.MemoryArg(l.MemoryMB)
+				}
+				return "no limit"
+			}, &nf.place).
+			Value(&nf.memory).
+			Validate(func(v string) error { return limitError(core.CheckLimits(strings.TrimSpace(v), "")) }),
+		huh.NewInput().Title("CPUs").
+			Description("the most it may use").
+			PlaceholderFunc(func() string {
+				if l := usual(); l.CPUs > 0 {
+					return fmt.Sprint(l.CPUs)
+				}
+				return "no limit"
+			}, &nf.place).
+			Value(&nf.cpus).
+			Validate(func(v string) error { return limitError(core.CheckLimits("", strings.TrimSpace(v))) }),
 	}
+}
+
+// limitError is why a limit typed in the form can't be used, without the
+// option's name core puts first.
+func limitError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	for _, by := range []string{"--memory: ", "--cpus ", "--memory ", "--cpus: "} {
+		msg = strings.TrimPrefix(msg, by)
+	}
+	return errors.New(msg)
 }
 
 // sizeForm tells the form how much room it has, so it shows every field
@@ -334,7 +377,7 @@ func (m *model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if k, ok := msg.(tea.KeyPressMsg); ok && k.String() == "ctrl+o" && !m.nf.more {
 		m.nf.more = true
 		m.form.UpdateFieldPositions()
-		m.say(info, "more options follow the last field: network, where it runs, API keys")
+		m.say(info, "more options follow the last field: network, where it runs, API keys, memory and CPUs")
 		return m, nil
 	}
 	// tab moves on from a text field with nothing to complete. Never from

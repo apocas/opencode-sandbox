@@ -11,8 +11,11 @@ type Row struct {
 	Runtime string // the OCI runtime it was created with ("" before 0.5.0)
 	Gateway string // set if its API keys stay on this machine ("" before 0.9.0)
 	Network string // "none" if it has no network ("" before 0.10.0: open)
-	Engine  string // the Name of the engine it lives in
-	Version string // the opencode-sandbox that created it ("" before 0.1)
+	// Memory ("4g", "512m") and CPUs ("4") it may use; "" where it has no
+	// such limit, and before 0.12.0.
+	Memory, CPUs string
+	Engine       string // the Name of the engine it lives in
+	Version      string // the opencode-sandbox that created it ("" before 0.1)
 }
 
 // Bind mounts a host path into a container.
@@ -41,6 +44,10 @@ type Spec struct {
 	DropAllCaps     bool
 	NoNewPrivileges bool
 	PidsLimit       int
+	// MemoryMB (MiB) and CPUs are the most it may use; 0 for the engine's
+	// own default. NoSwap: memory over the limit can't go to swap instead.
+	MemoryMB, CPUs int
+	NoSwap         bool
 
 	Image string
 	Cmd   []string
@@ -120,6 +127,12 @@ type Info struct {
 	// Runtimes are the OCI runtimes the engine knows, by name.
 	Runtimes       map[string]Runtime
 	DefaultRuntime string
+	// CPUs and MemoryMB (MiB) are what the engine has for containers; 0 if
+	// unknown.
+	CPUs, MemoryMB int
+	// NoMemoryLimit, NoSwapLimit, NoCPULimit: it can't hold a container to
+	// one (Docker without the cgroup controller for it).
+	NoMemoryLimit, NoSwapLimit, NoCPULimit bool
 }
 
 // Runtime is an OCI runtime: its program ("runc", "/usr/bin/runsc"…) and the

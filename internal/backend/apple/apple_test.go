@@ -29,7 +29,7 @@ func TestCreateArgs(t *testing.T) {
 	want := []string{
 		"container", "create", "-i", "-t", "--name", "opencode-sandbox-demo",
 		"--label", "opencode-sandbox.name=demo",
-		"--init", "--read-only", "--cap-drop", "ALL", "--memory", "4G", "--cpus", "4",
+		"--init", "--read-only", "--cap-drop", "ALL", "--memory", "4096M", "--cpus", "4",
 		"--tmpfs", "/tmp:exec,size=1g,mode=1777", "--network", "opencode-sandbox-demo",
 		"-e", "TERM=xterm",
 		"-v", "opencode-sandbox-demo-home-agent:/home/agent", "-v", "opencode-sandbox-demo-workspace:/workspace",
@@ -38,6 +38,11 @@ func TestCreateArgs(t *testing.T) {
 	}
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Errorf("got  %q\nwant %q", got, want)
+	}
+	// The VM is as large as the sandbox's limits.
+	s.MemoryMB, s.CPUs = 8192, 6
+	if got, _ := CreateArgs(s, "n"); !strings.Contains(strings.Join(got, " "), " --memory 8192M --cpus 6 ") {
+		t.Errorf("with limits: got %q", got)
 	}
 	s.Binds[0].Src = "/odd,dir"
 	if _, err := CreateArgs(s, "n"); err == nil {

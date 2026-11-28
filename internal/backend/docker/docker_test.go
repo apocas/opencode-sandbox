@@ -49,6 +49,24 @@ func TestCreateArgs(t *testing.T) {
 	}
 }
 
+// Memory and CPUs are capped, and swap with memory where the engine can.
+func TestCreateArgsLimits(t *testing.T) {
+	for _, c := range []struct {
+		s    backend.Spec
+		want string
+	}{
+		{backend.Spec{MemoryMB: 4096, CPUs: 4, NoSwap: true}, "--memory 4096m --memory-swap 4096m --cpus 4"},
+		{backend.Spec{MemoryMB: 512, CPUs: 1}, "--memory 512m --cpus 1"},
+		{backend.Spec{CPUs: 2, NoSwap: true}, "--cpus 2"},
+		{backend.Spec{MemoryMB: 1536}, "--memory 1536m"},
+	} {
+		c.s.Container, c.s.Image = "c", "i"
+		if got := strings.Join(CreateArgs(c.s), " "); got != "docker create -i --name c "+c.want+" i" {
+			t.Errorf("%+v: got %q, want … %s …", c.s, got, c.want)
+		}
+	}
+}
+
 func TestParseInfo(t *testing.T) {
 	info, err := parseInfo([]byte(`{"OS":"Docker Desktop","Version":"29.9.3","SecurityOptions":["name=seccomp,profile=builtin","name=cgroupns"],` +
 		`"Runtimes":{"runc":{"path":"runc","status":{"x":"y"}},"gvisor":{"path":"/usr/bin/runsc","runtimeArgs":["--host-uds=open"]}},"DefaultRuntime":"runc"}`))
@@ -59,6 +77,18 @@ func TestParseInfo(t *testing.T) {
 		len(info.SecurityOptions) != 2 || info.Runtimes["gvisor"].Path != "/usr/bin/runsc" || info.Runtimes["gvisor"].Args[0] != "--host-uds=open" ||
 		info.Runtimes["runc"].Path != "runc" {
 		t.Errorf("got %+v", info)
+	}
+	// Nothing said about limits (an older docker info): none can be held.
+	if info.CPUs != 0 || info.MemoryMB != 0 || !info.NoMemoryLimit || !info.NoSwapLimit || !info.NoCPULimit {
+		t.Errorf("limits of an info that names none: %+v", info)
+	}
+	info, err = parseInfo([]byte(`{"OS":"Ubuntu 24.04","Version":"29.0.0","Runtimes":{},"DefaultRuntime":"runc",` +
+		`"NCPU":12,"MemTotal":8319172608,"MemoryLimit":true,"SwapLimit":false,"CpuCfsQuota":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.CPUs != 12 || info.MemoryMB != 7933 || info.NoMemoryLimit || !info.NoSwapLimit || info.NoCPULimit {
+		t.Errorf("limits: %+v", info)
 	}
 	if _, err := parseInfo([]byte("not json")); err == nil {
 		t.Error("bad output was accepted")

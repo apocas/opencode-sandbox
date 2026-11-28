@@ -33,10 +33,12 @@ import (
 	"github.com/apocas/opencode-sandbox/internal/tarx"
 )
 
-// Memory and CPUs of a sandbox's VM (container's defaults are 1 GiB and 4).
+// MemoryMB (MiB) and CPUs of a sandbox's VM where its Spec doesn't say:
+// what every sandbox here got before 0.12.0 (container's own defaults are
+// 1 GiB and 4).
 const (
-	Memory = "4G"
-	CPUs   = 4
+	MemoryMB = 4096
+	CPUs     = 4
 )
 
 // Apple drives the container CLI found on PATH.
@@ -199,6 +201,7 @@ func (a *Apple) Rows(label string) ([]backend.Row, error) {
 			Created: HumanDuration(now.Sub(c.Configuration.CreationDate)) + " ago",
 			Source:  l("source"), Providers: l("providers"), KeyMode: l("keymode"), Runtime: l("runtime"),
 			Engine: "apple", Version: l("version"), Gateway: l("gateway"), Network: l("network"),
+			Memory: l("memory"), CPUs: l("cpus"),
 		}
 	}
 	return rows, nil
@@ -314,7 +317,15 @@ func CreateArgs(s backend.Spec, network string) ([]string, error) {
 	if s.DropAllCaps {
 		args = append(args, "--cap-drop", "ALL")
 	}
-	args = append(args, "--memory", Memory, "--cpus", fmt.Sprint(CPUs))
+	// The VM's size: it has no more to use, and no swap.
+	mem, cpus := MemoryMB, CPUs
+	if s.MemoryMB > 0 {
+		mem = s.MemoryMB
+	}
+	if s.CPUs > 0 {
+		cpus = s.CPUs
+	}
+	args = append(args, "--memory", strconv.Itoa(mem)+"M", "--cpus", strconv.Itoa(cpus))
 	for _, t := range s.Tmpfs {
 		args = append(args, "--tmpfs", t)
 	}
@@ -523,5 +534,13 @@ func (a *Apple) Info() (backend.Info, error) {
 	if err := json.Unmarshal(out, &st); err != nil || st.Status != "running" {
 		return backend.Info{}, errors.New("Apple container isn't running (start it with: container system start)")
 	}
-	return backend.Info{OS: "Apple container", Version: st.Server.Version}, nil
+	info := backend.Info{OS: "Apple container", Version: st.Server.Version, CPUs: runtime.NumCPU()}
+	// A VM can have as much memory as this Mac.
+	var mem bytes.Buffer
+	if run.Check(a.R, &run.Cmd{Args: []string{"sysctl", "-n", "hw.memsize"}, Stdout: &mem}) == nil {
+		if n, err := strconv.ParseInt(strings.TrimSpace(mem.String()), 10, 64); err == nil {
+			info.MemoryMB = int(n >> 20)
+		}
+	}
+	return info, nil
 }

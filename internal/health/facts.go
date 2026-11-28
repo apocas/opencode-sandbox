@@ -76,6 +76,11 @@ type Facts struct {
 
 	MissingSSH []string // OpenSSH tools not on PATH
 	PidsLimit  int
+	// Limits says the memory and CPUs a new sandbox may use: "4 GB of
+	// memory, 4 CPUs". LimitsErr is why what the environment asks for
+	// (OPENCODE_SANDBOX_MEMORY, _CPUS) can't be used.
+	Limits    string
+	LimitsErr string
 
 	RunscPath string // where gVisor's runsc is installed, if it is (Linux)
 	Systemd   bool   // Docker is a systemd service here (Linux)

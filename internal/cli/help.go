@@ -63,10 +63,15 @@ copied like the rest: they're named first, and on a terminal you're asked.
   --gateway on|off
                on (the default): its providers' API keys stay on this machine.
                off: they go into its config.
+  --memory AMOUNT
+               the most memory it may use, like 8g or 512m (default: 4g). Over
+               that, what runs in it is stopped; this machine isn't starved.
+  --cpus N     the most CPUs it may use (default: 4)
   -- ARGS      pass the remaining arguments to opencode
 
-The defaults of the last four options can be set in the environment (see
-opencode-sandbox help): OPENCODE_SANDBOX_NETWORK, _ENGINE, _RUNTIME, _GATEWAY.`},
+A sandbox never gets more memory or CPUs than its engine has. The defaults of
+the last six options can be set in the environment (see opencode-sandbox
+help): OPENCODE_SANDBOX_NETWORK, _ENGINE, _RUNTIME, _GATEWAY, _MEMORY, _CPUS.`},
 	{"ls", "", "list sandboxes", `
 Lists sandboxes: their state, what isolates them (docker, gvisor or apple),
 their SSH key (* when its private part is stored inside), providers (* when
@@ -177,6 +182,10 @@ the dashboard: your sandboxes, and keys to create, open, copy and delete them.
                                keys, instead of a gateway that keeps them here
   OPENCODE_SANDBOX_NETWORK     none: give new sandboxes no network; they reach
                                only their providers, through the gateway
+  OPENCODE_SANDBOX_MEMORY      the most memory a new sandbox may use, like 8g
+                               (default: 4g, or all the engine has if less)
+  OPENCODE_SANDBOX_CPUS        the most CPUs a new sandbox may use (default: 4,
+                               or all the engine has if fewer)
   OPENCODE_SANDBOX_SEED_HOSTS  hosts whose keys are copied from your
                                ~/.ssh/known_hosts into sandboxes, so the first
                                hop is verified; e.g. "[jump.example.com]:2222"

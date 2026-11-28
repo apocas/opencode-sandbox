@@ -206,6 +206,10 @@ func (x *cli) newCmd(args []string) (int, error) {
 			o.Runtime, err = value("the name of a Docker runtime")
 		case a == "--gateway":
 			o.Gateway, err = value("on or off")
+		case a == "--memory":
+			o.Memory, err = value("an amount of memory, like 8g or 512m")
+		case a == "--cpus":
+			o.CPUs, err = value("a number of CPUs")
 		case a == "--":
 			o.Args = args[i+1:]
 			i = len(args)
@@ -231,6 +235,9 @@ func (x *cli) newCmd(args []string) (int, error) {
 	}
 	if network == "none" && o.Key == "" {
 		o.Key = "none" // nowhere to log in to: no question to ask
+	}
+	if err := core.CheckLimits(o.Memory, o.CPUs); err != nil {
+		return 0, usageError{err.Error()}
 	}
 	ws := "" // of a sandbox that starts empty
 	switch {
