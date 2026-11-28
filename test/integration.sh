@@ -56,6 +56,15 @@ refuse() {
   local desc="$1" pat="$2" out; shift 2
   if ! out="$("$@" 2>&1 </dev/null)" && grep -qE -- "$pat" <<<"$out"; then ok "$desc"; else bad "$desc" "$out"; fi
 }
+# gwlog NAME: the last lines of what a sandbox's gateway said, to go with a
+# check of it that failed
+gwlog() {
+  local dir="${TMPDIR:-/tmp}"
+  dir="${dir%/}/opencode-sandbox-$(id -u)"
+  [[ -z "${XDG_RUNTIME_DIR:-}" ]] || dir="$XDG_RUNTIME_DIR/opencode-sandbox"
+  echo "the gateway's log:"
+  tail -n 8 "$dir/gateways/$1/log" 2>&1
+}
 # flat CMD...: CMD's output as one line (health wraps its lines)
 flat() { "$@" 2>&1 | tr -s ' \n' ' '; }
 # pty KEYS CMD...: run CMD on a 120x30 terminal, pressing KEYS a second
@@ -260,7 +269,7 @@ out="$(xc it-h sh -c "curl -sS -m 20 -o /dev/null -w '%{http_code} ' -X DELETE $
   curl -sS -m 20 -o /dev/null -w '%{http_code}' $mcp http://127.0.0.1:17872/mcp/nope" 2>&1)"
 [[ "$out" == "200 405 404" ]] && ok "DELETE reaches an MCP server only" || bad "DELETE reaches an MCP server only" "$out"
 out="$(xc it-h sh -c "curl -sS -m 20 -N $auth -H 'Content-Type: application/json' -d '{\"model\":\"m1\",\"stream\":true}' http://127.0.0.1:17872/provider/p1/chat/completions" 2>&1)"
-grep -q 'data: \[DONE\]' <<<"$out" && ok "an answer is streamed back" || bad "an answer is streamed back" "$out"
+grep -q 'data: \[DONE\]' <<<"$out" && ok "an answer is streamed back" || bad "an answer is streamed back" "$(tail -c 300 <<<"$out")"$'\n'"$(gwlog it-h)"
 # The key goes into the header keys travel in and nowhere else, and only to
 # this sandbox's provider.
 : >"$T/provider.log"
@@ -380,10 +389,13 @@ for _ in $(seq 40); do pgrep -f -- "$BIN --internal-gateway it-n" >/dev/null && 
 # web URL: what a program in the sandbox gets for it: the status, then what
 # was answered. (--noproxy '': this machine's address is the one address
 # programs there keep for themselves.)
+# What curl says goes to files there and is put together in the sandbox:
+# its two outputs, read from here as they come, can arrive in pieces and in
+# either order.
 web() {
-  local out
-  out="$(xc it-n sh -c "curl -sS -m 20 --noproxy '' -w '\n%{http_code}' $*" 2>&1)"
-  echo "${out##*$'\n'} ${out%$'\n'*}"
+  xc it-n sh -c ": >/tmp/web.out
+    code=\$(curl -sS -m 20 --noproxy '' -o /tmp/web.out -w '%{http_code}' $* 2>/tmp/web.err)
+    echo \"\$code \$(cat /tmp/web.out /tmp/web.err)\"" 2>&1
 }
 if [[ "$ENGINE" == apple ]]; then
   container inspect opencode-sandbox-it-n | tr -d ' \n' | grep -q '"networks":\[\]' && ok "it is on no network of its own" || bad "it is on no network of its own"
