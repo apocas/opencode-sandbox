@@ -4,6 +4,18 @@ All notable changes to opencode-sandbox. Versions follow
 [Semantic Versioning](https://semver.org); each release is tagged `vX.Y.Z`.
 To update, see [Updating](README.md#updating).
 
+## [0.11.1] - 2026-11-28
+
+### Fixed
+
+- The dashboard came back garbled, with parts missing or in the wrong place,
+  after a sandbox in Apple container closed: on quitting opencode with
+  `ctrl-c`, say. Apple's `container` leaves the terminal in non-blocking mode
+  when it exits, so every redraw of the dashboard was cut short after its
+  first 1024 bytes. The terminal is now put back in blocking mode whenever a
+  sandbox's program returns. The shell you come back to after `new`, `open`
+  or `shell` no longer inherits it non-blocking either.
+
 ## [0.11.0] - 2026-11-28
 
 ### Added
@@ -360,6 +372,7 @@ First release.
   `--resume` warns about sandboxes created by an older version.
 - Bundles opencode 2.4.2 (x86_64 and arm64 builds, checksums verified).
 
+[0.11.1]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.11.1
 [0.11.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.11.0
 [0.10.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.10.0
 [0.9.2]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.9.2

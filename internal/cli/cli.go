@@ -20,6 +20,7 @@ import (
 	"github.com/apocas/opencode-sandbox/internal/platform"
 	"github.com/apocas/opencode-sandbox/internal/run"
 	"github.com/apocas/opencode-sandbox/internal/selfupdate"
+	"github.com/apocas/opencode-sandbox/internal/tty"
 	"github.com/apocas/opencode-sandbox/internal/tui"
 	"github.com/apocas/opencode-sandbox/internal/ui"
 )
@@ -56,6 +57,9 @@ func Main(args []string) int {
 	x.c.TTY = x.stdinTTY && x.outTTY
 
 	code, err := x.main(args)
+	// Whatever had the terminal may have left it in non-blocking mode; the
+	// shell that gets it back shouldn't find it so.
+	tty.BlockingStdio()
 	var ee *run.ExitError
 	var ue usageError
 	switch {
@@ -418,7 +422,14 @@ func (x *cli) shell(args []string) (int, error) {
 	if os.Getenv("OPENCODE_SANDBOX_DEBUG") != "" {
 		fmt.Fprintf(os.Stderr, "+ %s\n", run.Quote(argv))
 	}
-	return 0, syscall.Exec(path, argv, os.Environ())
+	// Run, not replaced by it: the terminal is put right afterwards (see
+	// Main). A key like ctrl-c goes to the shell inside, not to us.
+	signal.Ignore(syscall.SIGINT)
+	defer signal.Reset(syscall.SIGINT)
+	cmd := exec.Command(path, argv[1:]...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	code, err := run.Status(cmd.Run())
+	return code, err
 }
 
 func (x *cli) key(args []string) (int, error) {

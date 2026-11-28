@@ -756,7 +756,7 @@ func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		name := cur.Name
-		return m, tea.ExecProcess(exec.Command(argv[0], argv[1:]...), func(err error) tea.Msg { return shellMsg{name, err} })
+		return m, tea.Exec(&shellCommand{exec.Command(argv[0], argv[1:]...)}, func(err error) tea.Msg { return shellMsg{name, err} })
 	case "p":
 		name, c := cur.Name, m.c
 		return m, func() tea.Msg { pub, err := c.PubKey(name); return pubMsg{name, pub, err} }

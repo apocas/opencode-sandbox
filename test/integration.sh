@@ -188,8 +188,15 @@ if (( ALL )); then check "agents stop" 'all sandbox ssh-agents stopped' "$BIN" a
 
 echo "== on a terminal"
 rm -f "$DATA/known_hosts"
-out="$(OPENCODE_SANDBOX_SEED_HOSTS="github.com" pty "enter" "$BIN" new -n it-c -- --version 2>&1)"
+# (Afterwards, on the same terminal: is it still in blocking mode? An
+# engine's client may leave it otherwise, and what's drawn next is cut short.)
+cat >"$T/blocking.py" <<'EOF'
+import fcntl, os
+print("terminal:", "NON-BLOCKING" if fcntl.fcntl(0, fcntl.F_GETFL) & os.O_NONBLOCK else "blocking")
+EOF
+out="$(OPENCODE_SANDBOX_SEED_HOSTS="github.com" pty "enter" bash -c "\"$BIN\" new -n it-c -- --version; python3 \"$T/blocking.py\"" 2>&1)"
 grep -q 'Which SSH key' <<<"$out" && grep -q 'opening sandbox' <<<"$out" && ok "key picker" || bad "key picker" "$out"
+grep -q 'terminal: blocking' <<<"$out" && ok "the terminal is left in blocking mode" || bad "the terminal is left in blocking mode" "$(tail -c 600 <<<"$out")"
 if ssh-keygen -F github.com -f "$HOME/.ssh/known_hosts" >/dev/null 2>&1; then
   [[ -s "$DATA/known_hosts" ]] && ok "seed hosts" || bad "seed hosts"
 fi

@@ -4,6 +4,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -30,4 +31,38 @@ func TestFoldMatchesFold(t *testing.T) {
 			}
 		}
 	}
+}
+
+// A descriptor left in non-blocking mode is put back; one that isn't stays.
+func TestBlocking(t *testing.T) {
+	// Raw descriptors: an os.File's Fd() would itself make them blocking.
+	var p [2]int
+	if err := syscall.Pipe(p[:]); err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Close(p[0])
+	defer syscall.Close(p[1])
+	r, w := uintptr(p[0]), uintptr(p[1])
+	nonblocking := func(fd uintptr) bool {
+		flags, _, e := syscall.Syscall(syscall.SYS_FCNTL, fd, syscall.F_GETFL, 0)
+		if e != 0 {
+			t.Fatal(e)
+		}
+		return flags&syscall.O_NONBLOCK != 0
+	}
+	if err := syscall.SetNonblock(int(w), true); err != nil {
+		t.Fatal(err)
+	}
+	if !nonblocking(w) {
+		t.Fatal("the pipe didn't go non-blocking")
+	}
+	Blocking(w, r)
+	if nonblocking(w) || nonblocking(r) {
+		t.Error("still non-blocking")
+	}
+	Blocking(w) // again: nothing to do
+	if nonblocking(w) {
+		t.Error("non-blocking after a second call")
+	}
+	Blocking(^uintptr(0)) // not a descriptor: no harm
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/apocas/opencode-sandbox/internal/run"
 	"github.com/apocas/opencode-sandbox/internal/sshagent"
 	"github.com/apocas/opencode-sandbox/internal/state"
+	"github.com/apocas/opencode-sandbox/internal/tty"
 )
 
 // ErrHangup: the terminal went away while a sandbox was open on it. The
@@ -175,6 +176,9 @@ func (o *OpenCommand) Run() error {
 	for {
 		select {
 		case err := <-done:
+			// The client may leave the terminal in non-blocking mode, which
+			// garbles what's drawn on it next: the dashboard, say.
+			tty.BlockingStdio()
 			o.Code, _ = run.Status(err)
 			o.Detached = e.State(c) == "running"
 			a.agents.Close(name) // closed rather than detached? then its key leaves memory now

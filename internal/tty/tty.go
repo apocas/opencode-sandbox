@@ -17,6 +17,19 @@ func IsTerminal(fd uintptr) bool {
 	return e == 0
 }
 
+// Blocking takes descriptors out of non-blocking mode. A program that had
+// the terminal may leave it that way (Apple's container does): what's then
+// written to it is cut short when the terminal can't take it all at once,
+// and a screen drawn after it comes out in pieces.
+func Blocking(fds ...uintptr) {
+	for _, fd := range fds {
+		_ = syscall.SetNonblock(int(fd), false)
+	}
+}
+
+// BlockingStdio is Blocking for standard input, output and error.
+func BlockingStdio() { Blocking(os.Stdin.Fd(), os.Stdout.Fd(), os.Stderr.Fd()) }
+
 // StdinIsTerminal is IsTerminal for standard input.
 func StdinIsTerminal() bool { return IsTerminal(os.Stdin.Fd()) }
 
