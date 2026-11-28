@@ -276,6 +276,21 @@ out="$(pty "wait enter" "$BIN" new "$T/dots" -n it-g -k none -- --version 2>&1)"
 grep -q 'Press enter to copy it as it is' <<<"$out" && grep -q 'opening sandbox' <<<"$out" && ok "on a terminal it asks first" || bad "on a terminal it asks first" "$out"
 check "cp names them too" 'is a dot file, which often holds secrets' "$BIN" cp it-f "$T/dots/.env"
 
+echo "== nothing copied"
+# --empty: an empty /workspace, though this runs in a folder with a.txt in
+# it; files can still be copied in later.
+mkdir -p "$T/out2"
+out="$("$BIN" new --empty -n it-z -k none -- --version 2>&1 </dev/null)"
+grep -q "created sandbox 'it-z', with nothing copied into it" <<<"$out" && grep -qE 'opencode v?[0-9]' <<<"$out" \
+  && ok "a sandbox with no folder" || bad "a sandbox with no folder" "$out"
+check "ls says where it's from" 'it-z .* nothing *$' "$BIN" ls
+cd "$T/out2"
+refuse "nothing was copied" 'could not copy' "$BIN" get it-z a.txt
+check "files can be copied in later" 'copied .*extra.txt into it-z' "$BIN" cp it-z "$T/extra.txt"
+check "and out again" 'copied it-z:/workspace/extra.txt' "$BIN" get it-z extra.txt
+cd "$T/ws"
+refuse "a folder and --empty at once" 'or --empty, not both' "$BIN" new "$T/ws" --empty -n it-x -k none
+
 echo "== without a network, and where it runs"
 # No network: opencode still reaches its provider, through the gateway, and
 # needs no SSH key (none is asked for, even without a terminal).
@@ -319,7 +334,7 @@ if (( ALL )); then
   check "ls empty again" 'no sandboxes' "$BIN" ls
 else
   skip "rm --all -y"
-  check "rm the rest by name" 'removed it-c' "$BIN" rm it-c it-d it-h it-q it-k it-e it-f it-g it-m it-o it-r it-s
+  check "rm the rest by name" 'removed it-c' "$BIN" rm it-c it-d it-h it-q it-k it-e it-f it-g it-m it-o it-r it-s it-z
   none "ls has none of the test's again"
 fi
 

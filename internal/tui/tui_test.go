@@ -405,12 +405,12 @@ func TestFormNamesDotFiles(t *testing.T) {
 	}
 	t.Chdir(dir)
 	m := withForm(t)
-	if got, want := m.nf.about(m.c), "copied into /workspace, never mounted\nits dot files too, which often hold secrets: .env · .npmrc"; got != want {
+	if got, want := m.nf.about(m.c), "copied into /workspace, never mounted; leave empty to copy nothing\nits dot files too, which often hold secrets: .env · .npmrc"; got != want {
 		t.Errorf("about the folder: %q, want %q", got, want)
 	}
 	raw := screen(t, m, 110, 32)
 	out := strings.Join(strings.Fields(strings.ReplaceAll(raw, "┃", " ")), " ")
-	if !strings.Contains(out, "never mounted its dot files too, which often hold secrets: .env · .npmrc >") || strings.Contains(out, ".gitignore") {
+	if !strings.Contains(out, "leave empty to copy nothing its dot files too, which often hold secrets: .env · .npmrc >") || strings.Contains(out, ".gitignore") {
 		t.Errorf("the form doesn't name them:\n%s", raw)
 	}
 	if os.Getenv("SHOW") != "" {
@@ -422,12 +422,28 @@ func TestFormNamesDotFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.nf.folder = clean
-	if got := m.nf.about(m.c); got != "copied into /workspace, never mounted" {
+	if got := m.nf.about(m.c); got != "copied into /workspace, never mounted; leave empty to copy nothing" {
 		t.Errorf("a folder without dot files: %q", got)
 	}
+	if o := m.nf.options("x"); o.Empty || o.Workspace != clean {
+		t.Errorf("what's asked for with a folder: %+v", o)
+	}
 	m.nf.folder = filepath.Join(dir, "nope")
-	if got := m.nf.about(m.c); got != "copied into /workspace, never mounted" {
+	if got := m.nf.about(m.c); got != "copied into /workspace, never mounted; leave empty to copy nothing" {
 		t.Errorf("a folder that isn't there: %q", got)
+	}
+	// The field left empty: nothing is copied, and that isn't a mistake.
+	for _, v := range []string{"", "  "} {
+		m.nf.folder = v
+		if got := m.nf.about(m.c); got != "nothing is copied: /workspace starts empty" {
+			t.Errorf("no folder (%q): %q", v, got)
+		}
+		if o := m.nf.options("x"); !o.Empty || o.Workspace != "" {
+			t.Errorf("what's asked for with no folder (%q): %+v", v, o)
+		}
+		if ws, err := m.nf.workspace(m.c); ws != "" || err != nil {
+			t.Errorf("the folder of an empty field: %q, %v", ws, err)
+		}
 	}
 }
 

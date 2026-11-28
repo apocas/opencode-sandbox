@@ -192,6 +192,8 @@ func (x *cli) newCmd(args []string) (int, error) {
 			o.Key, err = value("a key name, 'new' or 'none'")
 		case a == "-p":
 			prov, err = value("a provider name (or several: a,b)")
+		case a == "--empty":
+			o.Empty = true
 		case a == "--network":
 			o.Network, err = value("open or none")
 		case a == "--engine":
@@ -226,11 +228,16 @@ func (x *cli) newCmd(args []string) (int, error) {
 	if network == "none" && o.Key == "" {
 		o.Key = "none" // nowhere to log in to: no question to ask
 	}
-	ws, err := x.c.ResolveWorkspace(o.Workspace)
-	if err != nil {
-		return 0, err
+	ws := "" // of a sandbox that starts empty
+	switch {
+	case o.Empty && o.Workspace != "":
+		return 0, usagef("new takes a folder to copy (%s) or --empty, not both", o.Workspace)
+	case !o.Empty:
+		if ws, err = x.c.ResolveWorkspace(o.Workspace); err != nil {
+			return 0, err
+		}
+		o.Workspace = ws
 	}
-	o.Workspace = ws
 	if o.Name == "" {
 		o.Name = x.c.DefaultName(ws)
 	}
@@ -281,7 +288,11 @@ func (x *cli) newCmd(args []string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	x.done(fmt.Sprintf("created sandbox '%s' from %s", created.Name, ui.Tilde(ws)))
+	if ws == "" {
+		x.done(fmt.Sprintf("created sandbox '%s', with nothing copied into it", created.Name))
+	} else {
+		x.done(fmt.Sprintf("created sandbox '%s' from %s", created.Name, ui.Tilde(ws)))
+	}
 	if created.NewKey != nil {
 		x.showKey(created.NewKey)
 	}
@@ -380,7 +391,7 @@ func (x *cli) open(args []string) (int, error) {
 		}
 		var opts []ui.Option
 		for _, s := range ss {
-			opts = append(opts, ui.Option{Value: s.Name, Label: s.Name, Detail: ui.Status(s) + " · " + s.RunsIn + " · " + ui.Tilde(s.Source)})
+			opts = append(opts, ui.Option{Value: s.Name, Label: s.Name, Detail: ui.Status(s) + " · " + s.RunsIn + " · " + ui.Source(s)})
 		}
 		if name, err = x.t.Pick("Open which sandbox?", "", opts); err != nil {
 			return 0, err

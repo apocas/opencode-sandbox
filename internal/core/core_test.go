@@ -296,3 +296,29 @@ func TestNetworkAndGatewayAskedFor(t *testing.T) {
 		}
 	}
 }
+
+// A sandbox that starts empty copies no folder, not the current one.
+func TestEmpty(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv("OPENCODE_SANDBOX_LEGACY_DIR", "")
+	dir := t.TempDir()
+	dir, _ = filepath.EvalSymlinks(dir)
+	t.Chdir(dir)
+	t.Setenv("PWD", dir)
+	a := &Core{engines: []backend.Engine{existsNever{&fakeEngine{}}}}
+	both := &Core{engines: []backend.Engine{named{name: "apple"}}, Rep: Plain{}}
+	if _, err := both.Create(CreateOptions{Empty: true, Workspace: dir, Key: "none"}); err == nil || !strings.Contains(err.Error(), "a copy of a folder or starts empty, not both") {
+		t.Errorf("a folder and empty: %v", err)
+	}
+	if ws, err := a.ResolveWorkspace(""); ws != dir || err != nil {
+		t.Errorf("no folder named: %q, %v; want the current one", ws, err)
+	}
+	if name := a.DefaultName(""); !strings.HasPrefix(name, "sandbox-") || len(name) != len("sandbox-")+4 || !validName.MatchString(name) {
+		t.Errorf("the name of a sandbox that copies nothing: %q", name)
+	}
+	if d := a.DotFiles(""); len(d.Found) != 0 || d.Warning("") != "" {
+		t.Errorf("dot files of no folder: %+v", d)
+	}
+}

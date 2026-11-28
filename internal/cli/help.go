@@ -47,6 +47,8 @@ copied like the rest: they're named first, and on a terminal you're asked.
                those providers; opencode's built-in providers are switched
                off. Their API keys stay on this machine: opencode reaches
                each provider through a gateway that puts its key in.
+  --empty      copy nothing: the sandbox starts with an empty /workspace
+               (instead of DIR)
   --network open|none
                open (the default): the internet, your network and services on
                this machine. none: no network at all; the sandbox reaches only
@@ -63,7 +65,7 @@ copied like the rest: they're named first, and on a terminal you're asked.
                off: they go into its config.
   -- ARGS      pass the remaining arguments to opencode
 
-The defaults of the last four can be set in the environment (see
+The defaults of the last four options can be set in the environment (see
 opencode-sandbox help): OPENCODE_SANDBOX_NETWORK, _ENGINE, _RUNTIME, _GATEWAY.`},
 	{"ls", "", "list sandboxes", `
 Lists sandboxes: their state, what isolates them (docker, gvisor or apple),

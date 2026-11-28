@@ -47,6 +47,7 @@ var validName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 // KeyChoices and ProviderChoices for what there is to choose from.
 type CreateOptions struct {
 	Workspace string   // folder to copy in ("" for the current folder)
+	Empty     bool     // copy no folder: /workspace starts empty (Workspace is then "")
 	Name      string   // "" for the folder's name plus a random suffix
 	Key       string   // a key pair in ~/.ssh (name or path), "new" or "none"
 	Providers []string // provider ids; none for the only one configured
@@ -132,9 +133,14 @@ func (a *Core) Create(o CreateOptions) (*Created, error) {
 			return nil, errors.New("a sandbox without a network has nowhere to log in to, so it gets no SSH key; leave -k out")
 		}
 	}
-	workspace, err := a.ResolveWorkspace(o.Workspace)
-	if err != nil {
-		return nil, err
+	workspace := "" // of a sandbox that starts empty
+	switch {
+	case o.Empty && o.Workspace != "":
+		return nil, errors.New("a sandbox gets a copy of a folder or starts empty, not both")
+	case !o.Empty:
+		if workspace, err = a.ResolveWorkspace(o.Workspace); err != nil {
+			return nil, err
+		}
 	}
 	name := o.Name
 	if name == "" {
@@ -236,9 +242,13 @@ func (a *Core) ResolveWorkspace(arg string) (string, error) {
 	return dir, nil
 }
 
-// DefaultName is the folder's name plus a random suffix.
+// DefaultName is the folder's name plus a random suffix; "sandbox" plus one
+// for a sandbox that copies no folder ("").
 func (a *Core) DefaultName(workspace string) string {
 	base := workspace[strings.LastIndexByte(workspace, '/')+1:]
+	if workspace == "" {
+		base = "sandbox"
+	}
 	base = strings.Map(func(r rune) rune {
 		if r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '.' || r == '-' {
 			return r
@@ -493,6 +503,9 @@ func (a *Core) createContainer(e backend.Engine, sb *sandbox, opencodeArgs []str
 	}
 	if err := e.Create(s); err != nil {
 		return err
+	}
+	if sb.workspace == "" {
+		return nil // nothing to copy: /workspace starts empty
 	}
 	// Copy (never mount) the workspace in, keeping your uid so the agent can
 	// edit it.

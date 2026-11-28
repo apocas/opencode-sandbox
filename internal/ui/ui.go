@@ -138,6 +138,15 @@ func APIKeys(s core.Sandbox) string {
 	return "inside the sandbox (it has no gateway)"
 }
 
+// Source is the folder a sandbox was copied from, as shown: with ~ for your
+// home, or "nothing" if it started empty.
+func Source(s core.Sandbox) string {
+	if s.Source == "" {
+		return "nothing"
+	}
+	return Tilde(s.Source)
+}
+
 // Network is a sandbox's network as listed: open or none.
 func Network(s core.Sandbox) string {
 	if s.NoNetwork {
@@ -194,7 +203,7 @@ func (t *Theme) Table(ss []core.Sandbox) string {
 		})
 	for _, s := range ss {
 		tb.Row(t.Badge(s), t.Bold.Render(s.Name), t.StatusStyled(s), s.RunsIn, Network(s), KeyName(s), Providers(s),
-			t.Dim.Render(s.Created), t.Dim.Render(Tilde(s.Source)))
+			t.Dim.Render(s.Created), t.Dim.Render(Source(s)))
 	}
 	return strings.TrimRight(tb.Render(), "\n ")
 }

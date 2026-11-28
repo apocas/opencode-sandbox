@@ -46,11 +46,25 @@ func (nf *newForm) dotFiles(c *core.Core, ws string) core.DotFiles {
 	return d
 }
 
+// empty says whether the folder field is left empty: nothing is copied.
+func (nf *newForm) empty() bool { return strings.TrimSpace(nf.folder) == "" }
+
+// workspace is the folder typed so far, checked; "" where nothing is copied.
+func (nf *newForm) workspace(c *core.Core) (string, error) {
+	if nf.empty() {
+		return "", nil
+	}
+	return c.ResolveWorkspace(expand(nf.folder))
+}
+
 // about describes the folder typed so far: what happens to it, and the dot
 // files it has, which are copied too.
 func (nf *newForm) about(c *core.Core) string {
-	const copied = "copied into /workspace, never mounted"
-	ws, err := c.ResolveWorkspace(expand(nf.folder))
+	const copied = "copied into /workspace, never mounted; leave empty to copy nothing"
+	if nf.empty() {
+		return "nothing is copied: /workspace starts empty"
+	}
+	ws, err := nf.workspace(c)
 	if err != nil {
 		return copied
 	}
@@ -84,7 +98,7 @@ func (m *model) startForm() tea.Cmd {
 	nf := &newForm{folder: ui.Tilde(wd), defaults: map[string]string{}, dots: map[string]core.DotFiles{}}
 	c := m.c
 	defaultName := func() string {
-		ws, err := c.ResolveWorkspace(expand(nf.folder))
+		ws, err := nf.workspace(c)
 		if err != nil {
 			return "the folder's name"
 		}
@@ -112,7 +126,13 @@ func (m *model) startForm() tea.Cmd {
 			DescriptionFunc(func() string { return nf.about(c) }, &nf.folder).
 			Value(&nf.folder).
 			SuggestionsFunc(func() []string { return dirSuggestions(nf.folder) }, &nf.folder).
-			Validate(func(v string) error { _, err := c.ResolveWorkspace(expand(v)); return err }),
+			Validate(func(v string) error {
+				if strings.TrimSpace(v) == "" {
+					return nil // nothing is copied
+				}
+				_, err := c.ResolveWorkspace(expand(v))
+				return err
+			}),
 		huh.NewInput().Title("Name").
 			PlaceholderFunc(defaultName, &nf.folder).
 			Value(&nf.name).
@@ -165,6 +185,9 @@ func (m *model) startForm() tea.Cmd {
 func (nf *newForm) options(name string) core.CreateOptions {
 	o := core.CreateOptions{Workspace: expand(nf.folder), Name: name, Key: nf.key, Providers: nf.providers,
 		Network: nf.network, Gateway: nf.gateway}
+	if nf.empty() {
+		o.Workspace, o.Empty = "", true
+	}
 	o.Engine, o.Runtime = placeOf(nf.place)
 	if o.Network == "none" {
 		o.Key = "none" // nowhere to log in to
@@ -333,13 +356,16 @@ func (m *model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case huh.StateCompleted:
 		nf, c := m.nf, m.c
 		m.mode, m.form = progressMode, nil
-		ws, _ := c.ResolveWorkspace(expand(nf.folder))
+		ws, _ := nf.workspace(c)
 		name := nf.name
 		if name == "" {
 			name = nf.defaults[ws]
 		}
 		o := nf.options(name)
 		m.prog = progress{title: "Creating sandbox '" + name + "' from " + ui.Tilde(ws)}
+		if ws == "" {
+			m.prog.title = "Creating sandbox '" + name + "', with nothing copied into it"
+		}
 		if d := nf.dotFiles(c, ws); len(d.Found) > 0 {
 			m.prog.notes = append(m.prog.notes, prefix(true)+"copying its dot files too: "+d.List(4))
 		}

@@ -312,7 +312,7 @@ func (m *model) details(w int) string {
 	row("state", t.StatusStyled(*s))
 	row("runs in", ui.RunsIn(*s))
 	row("network", ui.NetworkWords(*s))
-	row("copied from", ui.Tilde(s.Source))
+	row("copied from", ui.Source(*s))
 	provs := s.Providers
 	if provs == "" {
 		provs = ui.Providers(*s)

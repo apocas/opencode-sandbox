@@ -52,7 +52,7 @@ type Sandbox struct {
 	// NoNetwork: it has no network, and reaches only its providers,
 	// through the gateway.
 	NoNetwork bool
-	Source    string // the folder it was copied from
+	Source    string // the folder it was copied from; "" if it started empty
 	Version   string // the opencode-sandbox that created it ("" before 0.1)
 }
 

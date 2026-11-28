@@ -78,6 +78,7 @@ down:
 - **Your files are copied, not mounted.** The sandbox gets a snapshot of a
   folder. Nothing the agent writes reaches the original. The dot files in it
   that may hold secrets (`.env`, `.npmrc`…) are named before they're copied.
+  Or it gets no folder at all (`new --empty`), and starts empty.
 - **Only the providers you choose.** Each sandbox gets a filtered copy of your
   opencode config with just the selected provider(s). opencode's built-in
   providers (such as its free hosted models) are switched off.
@@ -307,7 +308,7 @@ Other ways:
 check it against `SHA256SUMS`, and put it on your `PATH`:
 
 ```bash
-v=0.10.0 os=$(uname -s | tr A-Z a-z) arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+v=0.11.0 os=$(uname -s | tr A-Z a-z) arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 f=opencode-sandbox_${v}_${os}_${arch}
 curl -fLO https://github.com/apocas/opencode-sandbox/releases/download/v$v/$f
 curl -fL https://github.com/apocas/opencode-sandbox/releases/download/v$v/SHA256SUMS | grep " $f\$" | shasum -a 256 -c
@@ -355,7 +356,7 @@ clone:
 cd /path/to/opencode-sandbox           # your clone
 git checkout master && git pull        # the latest code
 # or a specific release:
-git fetch --tags && git checkout v0.10.0
+git fetch --tags && git checkout v0.11.0
 opencode-sandbox version
 ```
 
@@ -416,6 +417,7 @@ Or straight from the shell:
 
 ```bash
 opencode-sandbox new ~/src/api                 # pick the key and provider
+opencode-sandbox new --empty                   # an empty sandbox: nothing copied in
 opencode-sandbox new . -n api -k new -p my-provider
 opencode-sandbox open api                      # continue where you left off
 ```
@@ -431,7 +433,7 @@ around it. Any key skips it; `OPENCODE_SANDBOX_INTRO=off` turns it off.
 |---|---|
 | `↑` `↓` (`k` `j`) | move |
 | `enter` | open the sandbox, continuing its last session (or attach to it if it's open) |
-| `n` | create a sandbox: a short form (`enter` next field, `shift-tab` previous, `tab` completes the folder). `ctrl-o` in it asks more: the network, where it runs, where its API keys are |
+| `n` | create a sandbox: a short form (`enter` next field, `shift-tab` previous, `tab` completes the folder; an empty folder field copies nothing). `ctrl-o` in it asks more: the network, where it runs, where its API keys are |
 | `esc` | back: leaves a form or dialog without doing anything, as does `ctrl-c`. While a sandbox is being created, it goes back to the list and the work carries on |
 | `s` | bash inside the sandbox (it must be open) |
 | `c` / `g` | copy a file or folder into its `/workspace` / out of it, into the current folder |
@@ -452,6 +454,7 @@ opencode-sandbox new [DIR] [-n NAME] [-k KEY] [-p PROVIDER] [OPTIONS] [-- ARGS..
 | Option of `new` | |
 |---|---|
 | `DIR` | folder to copy in (default: the current one). Your home folder, `~/.ssh` and similar are refused |
+| `--empty` | copy nothing, instead of `DIR`: the sandbox starts with an empty `/workspace` |
 | `-n NAME` | sandbox name (default: folder name plus a random suffix) |
 | `-k KEY` | a key name from `~/.ssh`, `new` (disposable) or `none`; asked if omitted. Only `new` or `none` on [some platforms](#platforms) |
 | `-p PROVIDER` | provider id(s) from your opencode config, several as `a,b`; asked if omitted, automatic if you have only one |
