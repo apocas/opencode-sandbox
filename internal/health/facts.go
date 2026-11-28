@@ -79,6 +79,9 @@ type Facts struct {
 	// NoNetwork: new sandboxes get no network (OPENCODE_SANDBOX_NETWORK is
 	// none), and reach only their providers, through the gateway.
 	NoNetwork bool
+	// Filtered: new sandboxes get a filtered network (it is "filtered"),
+	// and reach their providers and the hosts on their lists.
+	Filtered bool
 
 	MissingSSH []string // OpenSSH tools not on PATH
 	PidsLimit  int
@@ -196,6 +199,7 @@ func Gather(r run.Runner, docker, apple backend.Engine, version, image string) F
 	}
 	f.Gateway = gateway.Wanted(os.Getenv(gateway.Switch))
 	f.NoNetwork = os.Getenv("OPENCODE_SANDBOX_NETWORK") == "none"
+	f.Filtered = os.Getenv("OPENCODE_SANDBOX_NETWORK") == "filtered"
 
 	for _, tool := range []string{"ssh-keygen", "ssh-agent", "ssh-add"} {
 		if _, err := exec.LookPath(tool); err != nil {

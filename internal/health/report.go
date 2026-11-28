@@ -204,10 +204,13 @@ func sshKeys(f Facts, with string) string {
 // network says what a new sandbox can reach: open, unless new sandboxes get
 // no network.
 func network(f Facts, open string) string {
-	if f.NoNetwork {
+	switch {
+	case f.NoNetwork:
 		return "none (OPENCODE_SANDBOX_NETWORK): a sandbox reaches only its providers, through the gateway. No SSH, no downloads; `opencode-sandbox new --network open` makes one that can."
+	case f.Filtered:
+		return "filtered (OPENCODE_SANDBOX_NETWORK): a sandbox reaches only its providers and the hosts on its list, through the gateway. `opencode-sandbox allow NAME HOST` puts a host on it, `opencode-sandbox net NAME` shows it and what was refused."
 	}
-	return open + ". `opencode-sandbox new --network none` makes one that reaches only its providers, through the gateway."
+	return open + ". `opencode-sandbox new --network filtered` makes one that reaches only its providers and the hosts you allow; `--network none`, only its providers."
 }
 
 // apiKeys says where the API keys of a new sandbox's providers are, and the

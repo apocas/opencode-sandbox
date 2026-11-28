@@ -76,6 +76,10 @@ func DataDir() string {
 	return filepath.Join(home(), ".local/share/opencode-sandbox")
 }
 
+// NetDir holds the rules of a sandbox with a filtered network: the hosts
+// it may reach, and the ones it was refused.
+func NetDir(name string) string { return filepath.Join(DataDir(), "net", name) }
+
 // KeysDir holds disposable keys, one folder per sandbox.
 func KeysDir() string { return filepath.Join(DataDir(), "keys") }
 

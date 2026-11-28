@@ -50,11 +50,20 @@ copied like the rest: they're named first, and on a terminal you're asked.
                the headers and addresses of your remote MCP servers.
   --empty      copy nothing: the sandbox starts with an empty /workspace
                (instead of DIR)
-  --network open|none
+  --network open|filtered|none
                open (the default): the internet, your network and services on
-               this machine. none: no network at all; the sandbox reaches only
-               its providers, through the gateway, so it gets no SSH key and
-               can't download anything.
+               this machine. filtered: only its providers and the hosts on
+               its list (--allow, and later: opencode-sandbox allow); what
+               it's refused is written down (opencode-sandbox net). none: no
+               network at all; the sandbox reaches only its providers,
+               through the gateway, so it gets no SSH key and can't download
+               anything.
+  --allow HOSTS
+               what a sandbox with a filtered network may reach from the
+               start, as a,b (implies --network filtered): hosts
+               (example.com, *.example.com, 192.0.2.7, 10.0.0.0/8, each for
+               ports 443, 80 and 22, or with :PORT for one port) and the
+               built-in lists github, gitlab, npm, pypi and go
   --engine docker|apple
                where it runs (default: Apple container where that runs, else
                Docker)
@@ -94,6 +103,31 @@ agent, so treat it as untrusted.`},
 	{"rm", "NAME... | --all [-y]", "delete sandboxes, their files and disposable keys", `
 Deletes sandboxes with their files and disposable keys. --all deletes every
 sandbox after asking (-y: without asking).`},
+	{"net", "NAME", "show the hosts a sandbox may reach, and what it was refused", `
+For a sandbox with a filtered network (new --network filtered): the hosts
+and built-in lists it may reach besides its providers, what it's denied, and
+the hosts it tried to reach and was refused, with how often and why.`},
+	{"allow", "NAME HOST...", "let a sandbox with a filtered network reach hosts", `
+Puts hosts on the list a sandbox with a filtered network may reach. It
+applies at once, also while the sandbox is open.
+
+  HOST         example.com          that host
+               *.example.com        every host under that domain
+               192.0.2.7            an address
+               10.0.0.0/8           a range of addresses
+               example.com:8443     with :PORT, that port only; without,
+                                    ports 443, 80 and 22 (HTTPS, HTTP, SSH)
+               github, gitlab, npm, pypi, go
+                                    a built-in list: what that tool needs
+
+This machine, your network and a cloud's metadata address are reached only by
+a rule that names their address; a name that leads there isn't enough. An
+allowed host is a way out of the sandbox for whoever has an account on it.`},
+	{"deny", "NAME HOST...", "refuse a sandbox with a filtered network hosts", `
+Puts hosts on the list a sandbox with a filtered network is denied, which
+wins over what's allowed (deny one host under an allowed *.example.com, say),
+and takes them off the allowed ones. With the name of a built-in list, takes
+that list off.`},
 	{"health", "", "check that sandboxes can run here and how they're isolated", `
 Checks that sandboxes can run here, shows how a new one is isolated, and what
 you could install to isolate sandboxes better. Exits 1 if they can't run.`},
@@ -183,7 +217,12 @@ the dashboard: your sandboxes, and keys to create, open, copy and delete them.
   OPENCODE_SANDBOX_GATEWAY     off: give new sandboxes their providers' API
                                keys, instead of a gateway that keeps them here
   OPENCODE_SANDBOX_NETWORK     none: give new sandboxes no network; they reach
-                               only their providers, through the gateway
+                               only their providers, through the gateway.
+                               filtered: one that also reaches the hosts on
+                               a sandbox's list
+  OPENCODE_SANDBOX_ASK         off: don't ask on screen (macOS) when a sandbox
+                               with a filtered network wants a host that's on
+                               no list; refuse it and write it down
   OPENCODE_SANDBOX_MEMORY      the most memory a new sandbox may use, like 8g
                                (default: 4g, or all the engine has if less)
   OPENCODE_SANDBOX_CPUS        the most CPUs a new sandbox may use (default: 4,

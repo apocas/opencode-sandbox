@@ -263,7 +263,8 @@ func TestNetworkAndGatewayAskedFor(t *testing.T) {
 	t.Setenv("OPENCODE_SANDBOX_GATEWAY", "")
 	for _, c := range []struct{ want, env, got, err string }{
 		{"", "", "open", ""}, {"open", "none", "open", ""}, {"none", "", "none", ""}, {"", "none", "none", ""}, {"", "open", "open", ""},
-		{"sideways", "", "", `--network must be open or none, not "sideways"`}, {"", "off", "", `OPENCODE_SANDBOX_NETWORK must be open or none, not "off"`},
+		{"filtered", "", "filtered", ""}, {"", "filtered", "filtered", ""}, {"open", "filtered", "open", ""},
+		{"sideways", "", "", `--network must be open, filtered or none, not "sideways"`}, {"", "off", "", `OPENCODE_SANDBOX_NETWORK must be open, filtered or none, not "off"`},
 	} {
 		t.Setenv(NetworkEnv, c.env)
 		got, err := NetworkFor(c.want)
@@ -289,7 +290,12 @@ func TestNetworkAndGatewayAskedFor(t *testing.T) {
 	}{
 		{CreateOptions{Network: "none", Gateway: "off"}, "can't be made with the gateway off"},
 		{CreateOptions{Network: "none", Key: "new"}, "so it gets no SSH key; leave -k out"},
-		{CreateOptions{Network: "ether"}, "--network must be open or none"},
+		{CreateOptions{Network: "ether"}, "--network must be open, filtered or none"},
+		{CreateOptions{Network: "filtered", Gateway: "off"}, "reaches everything through the gateway, so it can't be made with the gateway off"},
+		{CreateOptions{Allow: []string{"github"}}, "--allow lists the hosts a sandbox with a filtered network may reach; add --network filtered (this one's is open)"},
+		{CreateOptions{Network: "none", Allow: []string{"github"}}, "add --network filtered (this one's is none)"},
+		{CreateOptions{Network: "filtered", Allow: []string{"github", "*.com"}}, "most of the internet"},
+		{CreateOptions{Network: "filtered", Allow: []string{"https://github.com"}}, "a rule is a host, not an address of a page"},
 		{CreateOptions{Gateway: "maybe"}, "--gateway must be on or off"},
 		{CreateOptions{Engine: "docker"}, "--engine docker, but"},
 	} {

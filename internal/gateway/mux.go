@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 )
 
 // The frames exchanged with gateway.pl: a connection's number (4 bytes), a
@@ -30,6 +31,10 @@ const (
 	// backlog is how many frames a connection may be ahead of its reader
 	// before the whole channel waits for it.
 	backlog = 64
+	// stall is how long the channel waits for one connection's reader
+	// before giving that connection up: the others, a model's answer among
+	// them, are waiting behind it.
+	stall = 30 * time.Second
 )
 
 // Session is this machine's end of the channel to a sandbox. It's a
@@ -48,6 +53,9 @@ type Session struct {
 	done  chan struct{}
 	once  sync.Once
 	err   error
+
+	// stall is how long a connection's reader may hold the channel up.
+	stall time.Duration
 }
 
 // stream is one connection of the sandbox.
@@ -65,9 +73,11 @@ func (st *stream) end() { st.once.Do(func() { close(st.gone); st.near.Close() })
 
 // NewSession serves the channel: r is what the half inside writes, w what it
 // reads.
-func NewSession(r io.Reader, w io.Writer) *Session {
+func NewSession(r io.Reader, w io.Writer) *Session { return newSession(r, w, stall) }
+
+func newSession(r io.Reader, w io.Writer, stall time.Duration) *Session {
 	s := &Session{w: w, streams: map[uint32]*stream{}, conns: make(chan net.Conn),
-		ready: make(chan struct{}), done: make(chan struct{})}
+		ready: make(chan struct{}), done: make(chan struct{}), stall: stall}
 	go func() { s.fail(s.read(r)) }()
 	return s
 }
@@ -169,10 +179,24 @@ func (s *Session) read(r io.Reader) error {
 			}
 			select {
 			case st.in <- data:
+				continue
+			default:
+			}
+			// Its reader is behind, and every connection waits with it: not
+			// for long.
+			wait := time.NewTimer(s.stall)
+			select {
+			case st.in <- data:
 			case <-st.gone:
 			case <-s.done:
+				wait.Stop()
 				return nil
+			case <-wait.C:
+				if err := s.drop(st); err != nil {
+					return err
+				}
 			}
+			wait.Stop()
 		case frameClose:
 			s.mu.Lock()
 			st := s.streams[id]
@@ -185,6 +209,19 @@ func (s *Session) read(r io.Reader) error {
 			return fmt.Errorf("a frame of type %d", typ)
 		}
 	}
+}
+
+// drop gives a connection up, and tells the sandbox.
+func (s *Session) drop(st *stream) error {
+	s.mu.Lock()
+	_, open := s.streams[st.id]
+	delete(s.streams, st.id)
+	s.mu.Unlock()
+	st.end()
+	if !open {
+		return nil
+	}
+	return s.write(st.id, frameClose, nil)
 }
 
 // open starts a connection the sandbox made.

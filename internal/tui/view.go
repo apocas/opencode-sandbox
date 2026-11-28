@@ -46,6 +46,8 @@ func (m *model) render() string {
 	switch m.mode {
 	case healthMode:
 		body = m.panel("Health", m.vp.View(), m.w, bodyH, true)
+	case netMode:
+		body = m.panel("Network of '"+m.net.sandbox+"' "+m.t.Dim.Render("(filtered)"), m.netBody(m.w-4, bodyH-3), m.w, bodyH, true)
 	case formMode:
 		body = lipgloss.Place(m.w, bodyH, lipgloss.Center, lipgloss.Top,
 			lipgloss.NewStyle().Padding(1, 2).Render(m.form.View()))
@@ -134,6 +136,8 @@ func (m *model) footer() string {
 		if m.setupErr != nil {
 			items = []string{k("↑/↓", "scroll"), k("q", "quit")}
 		}
+	case netMode:
+		items = []string{k("a", "allow the host"), k("d", "deny it"), k("↑/↓", "move"), k("r", "refresh"), k("esc", "back")}
 	case formMode:
 		for _, h := range formHints(m.form) {
 			items = append(items, k(h[0], h[1]))
@@ -169,7 +173,7 @@ func (m *model) footer() string {
 		items = []string{k("enter", "open"), k("n", "new"), k("s", "shell"), k("c", "copy in"), k("g", "get"),
 			k("p", "key"), k("d", "delete"), k("/", "filter"), k("h", "health"), k("?", "more"), k("q", "quit")}
 		if m.showHelp {
-			items = append(items[:len(items)-2], k("space", "mark"), k("esc", "unmark"), k("b", "rebuild image"),
+			items = append(items[:len(items)-2], k("a", "allowed hosts"), k("space", "mark"), k("esc", "unmark"), k("b", "rebuild image"),
 				k("r", "refresh"), k("j/k", "move"), k("?", "less"), k("q", "quit"))
 		}
 	}
@@ -312,6 +316,14 @@ func (m *model) details(w int) string {
 	row("state", t.StatusStyled(*s))
 	row("runs in", ui.RunsIn(*s))
 	row("network", ui.NetworkWords(*s))
+	if s.Filtered {
+		n := m.nets[s.Name]
+		hosts := ui.Plural(n[0], "host") + " on its list"
+		if n[1] > 0 {
+			hosts += ", " + t.Fg(t.Warn).Render(ui.Plural(n[1], "host")+" refused")
+		}
+		row("hosts", hosts+t.Dim.Render(" · a shows them"))
+	}
 	row("limits", ui.Limits(*s))
 	row("copied from", ui.Source(*s))
 	provs := s.Providers

@@ -13,3 +13,9 @@ Host *
     GlobalKnownHostsFile /etc/ssh/ssh_known_hosts /run/opencode-sandbox/config/known_hosts
     StrictHostKeyChecking accept-new
     ServerAliveInterval 30
+
+# With a filtered network the sandbox has no network of its own: ssh leaves
+# through the gateway, which lets it reach the hosts on the sandbox's list
+# and says which ones aren't (see opencode-sandbox net).
+Match exec "test ${OPENCODE_SANDBOX_PROXY:-0} -gt 0"
+    ProxyCommand opencode-sandbox-gateway connect %h %p

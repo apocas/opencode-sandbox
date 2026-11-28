@@ -528,7 +528,8 @@ func TestFormMoreOptions(t *testing.T) {
 	walk(enter, enter, enter, tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}, enter)
 	out = screen(t, m, 110, 32)
 	for _, want := range []string{"New sandbox: more options", "Network", "open", "none", "only its providers, through the gateway", "Runs in", "API keys", "on this machine", "inside the sandbox",
-		"Memory", "the most it may use, like 8g or 512m", "CPUs"} {
+		"filtered", "only its providers and the hosts you allow", "Allowed hosts", "github, example.com",
+		"Memory", "the most it may use, like 8g or 512m"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the second page lacks %q:\n%s", want, out)
 		}
@@ -536,11 +537,18 @@ func TestFormMoreOptions(t *testing.T) {
 	if m.mode != formMode {
 		t.Fatalf("the form ended before its second page: mode %v", m.mode)
 	}
-	// No network: no key, whatever was picked before; and the gateway.
+	// A filtered network keeps the key that was picked, and takes a list of hosts.
 	walk(press("j"), enter)
-	if m.nf.network != "none" {
+	if m.nf.network != "filtered" {
 		t.Fatalf("network picked: %q", m.nf.network)
 	}
+	m.nf.allow = "github, example.com:8443  *.corp.example"
+	if o := m.nf.options("x"); o.Network != "filtered" || o.Key != "new" || strings.Join(o.Allow, "|") != "github|example.com:8443|*.corp.example" {
+		t.Errorf("what's asked for with a filtered network: %+v", o)
+	}
+	m.nf.allow = ""
+	// No network: no key, whatever was picked before; and the gateway.
+	m.nf.network = "none"
 	if o := m.nf.options("x"); o.Network != "none" || o.Key != "none" || len(o.Providers) != 1 {
 		t.Errorf("what's asked for without a network: %+v", o)
 	}

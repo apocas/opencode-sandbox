@@ -17,6 +17,7 @@ import (
 
 	"github.com/apocas/opencode-sandbox/internal/core"
 	"github.com/apocas/opencode-sandbox/internal/health"
+	"github.com/apocas/opencode-sandbox/internal/netpolicy"
 	"github.com/apocas/opencode-sandbox/internal/platform"
 	"github.com/apocas/opencode-sandbox/internal/run"
 	"github.com/apocas/opencode-sandbox/internal/selfupdate"
@@ -133,6 +134,7 @@ func (x *cli) main(args []string) (int, error) {
 	run, ok := map[string]func([]string) (int, error){
 		"new": x.newCmd, "ls": x.ls, "open": x.open, "shell": x.shell, "key": x.key,
 		"cp": x.cp, "get": x.get, "rm": x.rm, "build": x.build, "agents": x.agents,
+		"allow": x.allow, "deny": x.deny, "net": x.net,
 	}[cmd]
 	if !ok {
 		return 0, usagef("unknown command: %s (see: opencode-sandbox help)", cmd)
@@ -199,7 +201,11 @@ func (x *cli) newCmd(args []string) (int, error) {
 		case a == "--empty":
 			o.Empty = true
 		case a == "--network":
-			o.Network, err = value("open or none")
+			o.Network, err = value("open, filtered or none")
+		case a == "--allow":
+			var hosts string
+			hosts, err = value("the hosts it may reach (or built-in lists of them), as a,b")
+			o.Allow = append(o.Allow, words([]string{hosts})...)
 		case a == "--engine":
 			o.Engine, err = value("docker or apple")
 		case a == "--runtime":
@@ -229,9 +235,20 @@ func (x *cli) newCmd(args []string) (int, error) {
 	if err := x.c.CheckPlace(o.Engine, o.Runtime); err != nil {
 		return 0, err
 	}
+	if len(o.Allow) > 0 && o.Network == "" {
+		o.Network = "filtered" // what a list of hosts is for
+	}
 	network, err := core.NetworkFor(o.Network)
 	if err != nil {
 		return 0, usageError{err.Error()}
+	}
+	if len(o.Allow) > 0 && network != "filtered" {
+		return 0, usagef("--allow lists the hosts a sandbox with a filtered network may reach; with --network %s there's no such list", network)
+	}
+	for _, w := range o.Allow {
+		if err := netpolicy.Check(w); err != nil {
+			return 0, usageError{err.Error()}
+		}
 	}
 	if network == "none" && o.Key == "" {
 		o.Key = "none" // nowhere to log in to: no question to ask

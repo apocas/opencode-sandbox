@@ -53,6 +53,9 @@ type Sandbox struct {
 	// NoNetwork: it has no network, and reaches only its providers,
 	// through the gateway.
 	NoNetwork bool
+	// Filtered: it has no network of its own, and reaches its providers and
+	// the hosts on its list, through the gateway.
+	Filtered bool
 	// Limits are the memory and CPUs it may use (none in Docker before
 	// 0.12.0).
 	Limits  Limits
@@ -113,7 +116,7 @@ func (a *Core) Sandboxes() ([]Sandbox, error) {
 			Name: r.Name, State: st, Status: status, Created: friendlyFix(r.Created),
 			Engine: r.Engine, RunsIn: a.runsIn(r),
 			KeyKind: r.KeyKind, Key: r.Key, KeyName: key[strings.LastIndexByte(key, '/')+1:],
-			KeyInside: r.KeyMode == "file", Providers: r.Providers, Gateway: r.Gateway != "", APIKeysInside: a.keysInside(r), NoNetwork: r.Network == "none",
+			KeyInside: r.KeyMode == "file", Providers: r.Providers, Gateway: r.Gateway != "", APIKeysInside: a.keysInside(r), NoNetwork: r.Network == "none", Filtered: r.Network == "filtered",
 			Limits: limitsOf(r), Source: r.Source, Version: r.Version,
 		}
 	}
@@ -179,6 +182,7 @@ func (a *Core) Remove(n string) (Removed, error) {
 	_ = os.Remove(state.ConfigFile(n))
 	_ = os.RemoveAll(state.SandboxDir(n))
 	_ = os.RemoveAll(state.GatewayDir(n)) // its gateway ended with it
+	_ = os.RemoveAll(state.NetDir(n))     // and its rules are no other sandbox's
 	r := Removed{Name: n}
 	if kind == "disposable" {
 		r.Disposable = true

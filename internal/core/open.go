@@ -74,7 +74,7 @@ func (a *Core) Prepare(name string) error {
 			return err
 		}
 		if provs != "" {
-			if err := a.writeConfig(e, name, provs, gw != "", network == "none"); err != nil {
+			if err := a.writeConfig(e, name, provs, gw != "", network == "none" || network == "filtered"); err != nil {
 				return err
 			}
 		} else {

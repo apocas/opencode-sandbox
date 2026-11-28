@@ -4,6 +4,53 @@ All notable changes to opencode-sandbox. Versions follow
 [Semantic Versioning](https://semver.org); each release is tagged `vX.Y.Z`.
 To update, see [Updating](README.md#updating).
 
+## [0.14.0] - 2026-11-28
+
+### Added
+
+- **A filtered network: a sandbox that reaches only the hosts you allow.**
+  `opencode-sandbox new --network filtered --allow github,npm` makes a sandbox
+  that reaches its providers and the hosts on its list, and nothing else: not
+  the rest of the internet, not your network, not your machine. So an agent
+  can `git pull` and install packages without being able to send your code
+  wherever it likes. The list takes hosts (`example.com`, `*.example.com`,
+  `192.0.2.7`, `10.0.0.0/8`, each for ports 443, 80 and 22, or with `:PORT`)
+  and the built-in lists `github`, `gitlab`, `npm`, `pypi` and `go`. See
+  [A filtered network](README.md#a-filtered-network).
+- `opencode-sandbox allow NAME HOST...` and `deny NAME HOST...` change a
+  sandbox's list, at once and also while it's open; `net NAME` shows the
+  list and the hosts the sandbox was refused, with how often and why. In the
+  dashboard, `a` shows the same and allows or denies a refused host with one
+  key, and the form (`ctrl-o`) has the network and its allowed hosts.
+- On a Mac, a dialog asks when a sandbox wants a host that's on no list,
+  while the connection waits: Deny (the default), allow until the sandbox
+  closes, or always allow. Not with the screen locked, and not with
+  `OPENCODE_SANDBOX_ASK=off`; then, and on Linux, the host is refused and
+  written down.
+- Such a sandbox has no network of its own, like one with `--network none`.
+  Its programs use the gateway as their proxy, and `ssh` leaves through it
+  too (so SSH keys work, and `git` over SSH). Nothing listens on a network,
+  and it works the same on Docker, gVisor and Apple container.
+- Addresses that aren't on the internet (this machine, your network, a
+  cloud's metadata address) are reached only by a rule that names the
+  address; a name that leads there isn't enough. For HTTPS, the name in the
+  TLS handshake has to be the host that was allowed.
+- `OPENCODE_SANDBOX_NETWORK=filtered` makes it the default for new sandboxes.
+
+### Fixed
+
+- One connection through the gateway that stopped reading could hold up
+  every other one of its sandbox, a model's answer among them, for as long
+  as it stayed open. Such a connection is now given up after 30 seconds.
+
+### Notes
+
+- What a filtered network doesn't do is in the README: an allowed host is a
+  way out for whoever has an account on it, an allowed SSH host is a tunnel,
+  and programs that ignore proxy settings have no route at all.
+- The image changes (the in-sandbox half of the gateway, and ssh's config),
+  so the first new sandbox after updating rebuilds it.
+
 ## [0.13.0] - 2026-11-28
 
 ### Added
@@ -429,6 +476,7 @@ First release.
   `--resume` warns about sandboxes created by an older version.
 - Bundles opencode 2.4.2 (x86_64 and arm64 builds, checksums verified).
 
+[0.14.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.14.0
 [0.13.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.13.0
 [0.12.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.12.0
 [0.11.1]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.11.1

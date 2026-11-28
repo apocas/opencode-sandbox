@@ -38,6 +38,7 @@ const (
 	confirmMode       // delete?
 	inputMode         // a path to copy in or out
 	healthMode        // the health report
+	netMode           // what a sandbox with a filtered network may reach
 )
 
 type kind int
@@ -83,6 +84,9 @@ type model struct {
 	agents    map[string]bool
 	// gateways: the open sandboxes whose gateway is being served.
 	gateways map[string]bool
+	// nets: for each sandbox with a filtered network, how many hosts are on
+	// its list and how many it was refused.
+	nets map[string][2]int
 
 	filter    textinput.Model
 	filtering bool
@@ -107,6 +111,7 @@ type model struct {
 	key  keyView
 	del  []string // sandboxes to delete
 	in   pathInput
+	net  netView
 	vp   viewport.Model
 
 	code int // exit status
@@ -136,7 +141,7 @@ func newModel(c *core.Core, t *ui.Theme, setupErr error) *model {
 	f.Placeholder = "filter by name, folder or provider"
 	m := &model{
 		c: c, t: t, ev: make(events, 1024), setupErr: setupErr,
-		marked: map[string]bool{}, fps: map[string]string{}, agents: map[string]bool{}, gateways: map[string]bool{},
+		marked: map[string]bool{}, fps: map[string]string{}, agents: map[string]bool{}, gateways: map[string]bool{}, nets: map[string][2]int{},
 		filter: f,
 		spin:   spinner.New(spinner.WithSpinner(spinner.MiniDot), spinner.WithStyle(t.Accented)),
 	}
@@ -501,6 +506,18 @@ func (m *model) setRows(ss []core.Sandbox) {
 	for _, s := range ss {
 		m.agents[s.Name] = s.State == core.StateOpen && !s.KeyInside && s.KeyKind != "none" && m.c.AgentRunning(s.Name)
 		m.gateways[s.Name] = s.State == core.StateOpen && s.Gateway && m.c.GatewayRunning(s.Name)
+		if s.Filtered {
+			if n, err := core.ReadNet(s.Name); err == nil {
+				m.nets[s.Name] = [2]int{len(n.Policy.Presets) + len(n.Policy.Allow), len(n.Blocked)}
+			}
+		}
+	}
+	if m.mode == netMode {
+		if m.has(m.net.sandbox) {
+			m.loadNet() // its gateway writes down what it refuses as it goes
+		} else {
+			m.mode = listMode
+		}
 	}
 }
 
@@ -627,6 +644,8 @@ func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.in.ti, cmd = m.in.ti.Update(k)
 		return m, cmd
+	case netMode:
+		return m.netKey(s)
 	case healthMode:
 		switch s {
 		case "esc", "q", "h":
@@ -694,6 +713,8 @@ func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.applyFilter()
 	case "r":
 		return m, m.load()
+	case "a":
+		return m, m.startNet()
 	case "h":
 		m.mode = healthMode
 		m.vp.SetContent(m.t.Dim.Render("checking…"))

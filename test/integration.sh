@@ -354,7 +354,7 @@ check "ls shows the default's too" 'it-o .* none +none ' "$BIN" ls
 OPENCODE_SANDBOX_NETWORK=none check "health names the default" 'network +none \(OPENCODE_SANDBOX_NETWORK\)' "$BIN" health
 refuse "no SSH key without a network" 'gets no SSH key' "$BIN" new "$T/ws" -n it-x --network none -k new
 refuse "no network without the gateway" 'with the gateway off' "$BIN" new "$T/ws" -n it-x --network none --gateway off
-refuse "an unknown network" 'must be open or none' "$BIN" new "$T/ws" -n it-x --network lan -k none
+refuse "an unknown network" 'must be open, filtered or none' "$BIN" new "$T/ws" -n it-x --network lan -k none
 refuse "an unknown engine" '--engine must be docker or apple' "$BIN" new "$T/ws" -n it-x --engine podman -k none
 refuse "an unknown gateway choice" '--gateway must be on or off' "$BIN" new "$T/ws" -n it-x --gateway maybe -k none
 # Where it runs, asked for: the engine in use, by name; and in Docker a runtime.
@@ -367,6 +367,92 @@ else
   [[ "$(docker inspect -f '{{.HostConfig.Runtime}}' opencode-sandbox-it-s)" == runc ]] && ok "created with it" || bad "created with it"
   refuse "a runtime Docker hasn't" '--runtime nope, but Docker has no runtime by that name' "$BIN" new "$T/ws" -n it-x --runtime nope -k none
 fi
+
+echo "== a filtered network"
+# No network of its own: what it reaches, it reaches through the gateway, by
+# its list. The stand-in provider on this machine is the host to reach: by
+# its address (127.0.0.1) and by a name that leads there (localhost).
+PP="$(cat "$T/provider.port")"
+pty "" "$BIN" new -n it-n -k none --network filtered >/dev/null 2>&1 &
+job=$!
+for _ in $(seq 60); do [[ "$(state opencode-sandbox-it-n)" == running ]] && break; sleep 1; done
+for _ in $(seq 40); do pgrep -f -- "$BIN --internal-gateway it-n" >/dev/null && break; sleep 0.5; done
+# web URL: what a program in the sandbox gets for it: the status, then what
+# was answered. (--noproxy '': this machine's address is the one address
+# programs there keep for themselves.)
+web() {
+  local out
+  out="$(xc it-n sh -c "curl -sS -m 20 --noproxy '' -w '\n%{http_code}' $*" 2>&1)"
+  echo "${out##*$'\n'} ${out%$'\n'*}"
+}
+if [[ "$ENGINE" == apple ]]; then
+  container inspect opencode-sandbox-it-n | tr -d ' \n' | grep -q '"networks":\[\]' && ok "it is on no network of its own" || bad "it is on no network of its own"
+else
+  [[ "$(docker inspect -f '{{.HostConfig.NetworkMode}}' opencode-sandbox-it-n)" == none ]] && ok "it is on no network of its own" || bad "it is on no network of its own"
+fi
+check "its programs are pointed at the gateway" '^http://127.0.0.1:17872 http://127.0.0.1:17872 127.0.0.1,localhost 17872$' \
+  xc it-n sh -c 'echo $HTTPS_PROXY $http_proxy $NO_PROXY $OPENCODE_SANDBOX_PROXY'
+check "ls shows its network" 'it-n .* filtered ' "$BIN" ls
+check "nothing is on its list yet" 'nothing else' "$BIN" net it-n
+# A host on no list: refused, with how to allow it, and written down.
+out="$(web "http://127.0.0.1:$PP/v1/models")"
+[[ "$out" == "403 opencode-sandbox: 127.0.0.1:$PP isn't on the list of hosts sandbox 'it-n' may reach; on your machine, \`opencode-sandbox allow it-n 127.0.0.1:$PP\` adds it" ]] \
+  && ok "a host on no list is refused, and how to allow it is said" || bad "a host on no list is refused, and how to allow it is said" "$out"
+check "what was refused is written down" "127.0.0.1:$PP +once, .*: it's on no list" "$BIN" net it-n
+# A name that leads to this machine isn't enough to reach it.
+check "allow a name" "sandbox 'it-n' may reach localhost:$PP" "$BIN" allow it-n "localhost:$PP"
+out="$(web "http://localhost:$PP/v1/models")"
+grep -qE "^403 opencode-sandbox: localhost leads to [0-9a-f.:]+, which isn't on the internet .*only a rule that names the address allows that" <<<"$out" \
+  && ok "a name that leads to this machine isn't enough" || bad "a name that leads to this machine isn't enough" "$out"
+# A rule that names the address is: at once, while the sandbox is open.
+: >"$T/provider.log"
+check "allow an address" "sandbox 'it-n' may reach 127.0.0.1:$PP" "$BIN" allow it-n "127.0.0.1:$PP"
+out="$(web "http://127.0.0.1:$PP/v1/models")"
+grep -q '^200 .*"id": "m1"' <<<"$out" && grep -q '"path": "/v1/models"' "$T/provider.log" \
+  && ok "an allowed address is reached, at once" || bad "an allowed address is reached, at once" "$out"
+check "and by the name that leads there" '^200 ' web "http://localhost:$PP/v1/models"
+# A tunnel, as for HTTPS and ssh (curl -p asks for one).
+check "a tunnel to an allowed host" '^200 .*"id": "m1"' web -p "http://127.0.0.1:$PP/v1/models"
+"$BIN" net it-n 2>&1 | grep -qE "127.0.0.1:$PP +(once|[0-9]+ times)" && bad "what is allowed since isn't listed as refused any more" "$("$BIN" net it-n 2>&1)" \
+  || ok "what is allowed since isn't listed as refused any more"
+# Denied wins, at once too.
+check "deny" "sandbox 'it-n' is denied 127.0.0.1:$PP" "$BIN" deny it-n "127.0.0.1:$PP"
+out="$(web "http://127.0.0.1:$PP/v1/models")"
+[[ "$out" == "403 opencode-sandbox: 127.0.0.1:$PP is denied to sandbox 'it-n' (rule 127.0.0.1:$PP)" ]] && ok "a denied host is refused again" || bad "a denied host is refused again" "$out"
+check "a tunnel to it is refused too" 'CONNECT tunnel failed, response 403' web -p "http://127.0.0.1:$PP/v1/models"
+out="$("$BIN" net it-n 2>&1)"
+grep -q "^  localhost:$PP\$" <<<"$out" && grep -q 'denied, whatever else allows it' <<<"$out" && grep -qE "127.0.0.1:$PP +[0-9]+ times, .*: a rule denies it" <<<"$out" \
+  && ok "net shows the list, the denials and what was refused" || bad "net shows the list, the denials and what was refused" "$out"
+# ssh can't use a proxy by itself: it leaves through the gateway too, and
+# says why a host can't be reached.
+out="$(xc it-n ssh -o BatchMode=yes -o ConnectTimeout=15 git@ssh-blocked.test true 2>&1)"
+grep -q "ssh-blocked.test isn't on the list of hosts sandbox 'it-n' may reach" <<<"$out" && ok "ssh says which host isn't on the list" || bad "ssh says which host isn't on the list" "$out"
+check "and that is written down too" 'ssh-blocked.test +once' "$BIN" net it-n
+# The provider is still reached through the gateway, whatever the list says.
+auth="-H \"Authorization: Bearer \$(jq -r .provider.p1.options.apiKey $CFG)\""
+check "its provider needs no rule" '"id": "m1"' xc it-n sh -c "curl -sS -m 20 $auth http://127.0.0.1:17872/provider/p1/models"
+pid="$(pgrep -f -- "$BIN new -n it-n" | head -1)"
+[[ -z "$pid" ]] || kill -HUP "$pid"
+wait "$job" 2>/dev/null
+# opencode itself, with a filtered network.
+check "opencode reaches its provider with a filtered network" 'the gateway works' "$BIN" new "$T/ws" -n it-v -k none --network filtered -- run hello
+# A list from the start; and a list is what makes a network filtered.
+check "a sandbox with a list from the start" 'opencode v?[0-9]' "$BIN" new "$T/ws" -n it-w -k none --allow github,example.com:8443 --allow '*.corp.example' -- --version
+check "its network is filtered" 'it-w .* filtered ' "$BIN" ls
+out="$("$BIN" net it-w 2>&1)"
+grep -q 'github, a built-in list: git, the API and release downloads of github.com' <<<"$out" && grep -q '^  example.com:8443$' <<<"$out" \
+  && grep -q '^  \*.corp.example (ports 443, 80 and 22)$' <<<"$out" && ok "net shows its list" || bad "net shows its list" "$out"
+check "a built-in list is taken off by name" "no longer has the built-in list github" "$BIN" deny it-w github
+[[ -s "$DATA/net/it-w/policy.json" ]] && ok "its rules are kept with opencode-sandbox's data" || bad "its rules are kept with opencode-sandbox's data"
+"$BIN" rm it-w >/dev/null 2>&1
+[[ ! -e "$DATA/net/it-w" ]] && ok "and deleted with it" || bad "and deleted with it"
+OPENCODE_SANDBOX_NETWORK=filtered check "health names a filtered network as the default" 'network +filtered \(OPENCODE_SANDBOX_NETWORK\)' "$BIN" health
+refuse "a list of most of the internet" 'most of the internet' "$BIN" new "$T/ws" -n it-x -k none --allow '*.com'
+refuse "a page's address as a host" 'a rule is a host, not an address of a page' "$BIN" new "$T/ws" -n it-x -k none --allow https://example.com/x
+refuse "a list without a filtered network" "with --network open there's no such list" "$BIN" new "$T/ws" -n it-x -k none --network open --allow github
+refuse "a filtered network without the gateway" 'reaches everything through the gateway' "$BIN" new "$T/ws" -n it-x -k none --network filtered --gateway off
+refuse "rules for a sandbox whose network is open" "has no list of hosts: its network is open" "$BIN" allow it-q github
+refuse "rules for a sandbox that isn't there" "no sandbox named 'it-nope'" "$BIN" net it-nope
 
 echo "== limits"
 # What the engine holds a sandbox to: memory in MiB, then CPUs.
@@ -416,7 +502,7 @@ if (( ALL )); then
   check "ls empty again" 'no sandboxes' "$BIN" ls
 else
   skip "rm --all -y"
-  check "rm the rest by name" 'removed it-c' "$BIN" rm it-c it-d it-h it-q it-k it-e it-f it-g it-m it-o it-r it-s it-z it-l it-u
+  check "rm the rest by name" 'removed it-c' "$BIN" rm it-c it-d it-h it-q it-k it-e it-f it-g it-m it-o it-r it-s it-z it-l it-u it-n it-v
   none "ls has none of the test's again"
 fi
 

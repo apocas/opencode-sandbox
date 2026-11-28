@@ -14,6 +14,7 @@ import (
 
 	"github.com/apocas/opencode-sandbox/internal/backend"
 	"github.com/apocas/opencode-sandbox/internal/gateway"
+	"github.com/apocas/opencode-sandbox/internal/netpolicy"
 	"github.com/apocas/opencode-sandbox/internal/occonfig"
 	"github.com/apocas/opencode-sandbox/internal/platform"
 	"github.com/apocas/opencode-sandbox/internal/run"
@@ -33,7 +34,7 @@ type sandbox struct {
 	// gateway: its providers' API keys stay on this machine (see package
 	// gateway).
 	gateway bool
-	// network is "open" or "none" (see CreateOptions).
+	// network is "open", "filtered" or "none" (see CreateOptions).
 	network string
 	// limits are the memory and CPUs it may use; noSwap: the engine can keep
 	// memory over the limit out of swap.
@@ -62,9 +63,13 @@ type CreateOptions struct {
 	// OPENCODE_SANDBOX_RUNTIME), and that to what isolates best here.
 	Engine, Runtime string
 	// Network is "open" (the internet, your network, this machine's
-	// services) or "none" (nothing but its providers, through the gateway;
-	// so no SSH either). "" leaves it to NetworkEnv, then open.
+	// services), "filtered" (its providers, and the hosts on its list) or
+	// "none" (nothing but its providers, through the gateway; so no SSH
+	// either). "" leaves it to NetworkEnv, then open.
 	Network string
+	// Allow is what a sandbox with a filtered network may reach from the
+	// start: hosts (see netpolicy.ParseRule) and built-in lists of them.
+	Allow []string
 	// Gateway is "on" (its providers' API keys stay on this machine) or
 	// "off" (they go into its config). "" leaves it to the environment
 	// (OPENCODE_SANDBOX_GATEWAY), then on.
@@ -75,11 +80,12 @@ type CreateOptions struct {
 	Memory, CPUs string
 }
 
-// NetworkEnv set to "none" gives new sandboxes no network.
+// NetworkEnv set to "none" gives new sandboxes no network, and set to
+// "filtered" one that reaches only the hosts on a sandbox's list.
 const NetworkEnv = "OPENCODE_SANDBOX_NETWORK"
 
-// NetworkFor is the network a new sandbox gets, "open" or "none", given
-// what was asked for ("" to leave it to NetworkEnv).
+// NetworkFor is the network a new sandbox gets, "open", "filtered" or
+// "none", given what was asked for ("" to leave it to NetworkEnv).
 func NetworkFor(want string) (string, error) {
 	by := "--network"
 	if want == "" {
@@ -88,10 +94,10 @@ func NetworkFor(want string) (string, error) {
 	switch want {
 	case "", "open":
 		return "open", nil
-	case "none":
-		return "none", nil
+	case "filtered", "none":
+		return want, nil
 	}
-	return "", fmt.Errorf("%s must be open or none, not %q", by, want)
+	return "", fmt.Errorf("%s must be open, filtered or none, not %q", by, want)
 }
 
 // gatewayFor says whether a new sandbox gets a gateway, given what was
@@ -135,7 +141,8 @@ func (a *Core) Create(o CreateOptions) (*Created, error) {
 	if err != nil {
 		return nil, err
 	}
-	if network == "none" {
+	switch network {
+	case "none":
 		// Its providers are all it reaches, and only through the gateway.
 		switch {
 		case !gw:
@@ -144,6 +151,21 @@ func (a *Core) Create(o CreateOptions) (*Created, error) {
 			o.Key = "none"
 		case o.Key != "none":
 			return nil, errors.New("a sandbox without a network has nowhere to log in to, so it gets no SSH key; leave -k out")
+		}
+	case "filtered":
+		// It has no network of its own either: all it reaches, it reaches
+		// through the gateway.
+		if !gw {
+			return nil, errors.New("a sandbox with a filtered network reaches everything through the gateway, so it can't be made with the gateway off")
+		}
+	}
+	if len(o.Allow) > 0 && network != "filtered" {
+		return nil, fmt.Errorf("--allow lists the hosts a sandbox with a filtered network may reach; add --network filtered (this one's is %s)", network)
+	}
+	var policy netpolicy.Policy
+	for _, word := range o.Allow {
+		if err := policy.AllowWord(word); err != nil {
+			return nil, err
 		}
 	}
 	workspace := "" // of a sandbox that starts empty
@@ -173,7 +195,7 @@ func (a *Core) Create(o CreateOptions) (*Created, error) {
 	if err := a.chooseProviders(sb, strings.Join(o.Providers, ",")); err != nil {
 		return nil, err
 	}
-	if network == "none" {
+	if network != "open" {
 		ids := splitList(sb.providers)
 		routes, inside := gateway.Routes(a.config(), ids, gatewayEnv(), true)
 		for _, id := range ids {
@@ -182,7 +204,7 @@ func (a *Core) Create(o CreateOptions) (*Created, error) {
 				if why == "" {
 					why = gateway.NoAddress
 				}
-				return nil, fmt.Errorf("provider '%s' can't be reached from a sandbox without a network: the gateway can't serve it, because %s", id, why)
+				return nil, fmt.Errorf("provider '%s' can't be reached from a sandbox without a network of its own: the gateway can't serve it, because %s", id, why)
 			}
 		}
 	}
@@ -200,8 +222,16 @@ func (a *Core) Create(o CreateOptions) (*Created, error) {
 	for _, n := range less {
 		a.note("%s", n)
 	}
-	if err := a.writeConfig(e, name, sb.providers, sb.gateway, network == "none"); err != nil {
+	if err := a.writeConfig(e, name, sb.providers, sb.gateway, network != "open"); err != nil {
 		return nil, err
+	}
+	// The rules of a sandbox that had this name before aren't this one's.
+	store := netpolicy.Store{Dir: state.NetDir(name)}
+	_ = store.Remove()
+	if network == "filtered" {
+		if err := store.Update(func(p *netpolicy.Policy) error { *p = policy; return nil }); err != nil {
+			return nil, err
+		}
 	}
 	if sb.keyKind == "disposable" {
 		if err := a.newDisposableKey(sb); err != nil {
@@ -477,7 +507,7 @@ func (a *Core) createContainer(e backend.Engine, sb *sandbox, opencodeArgs []str
 		Init: true, ReadOnlyRoot: true, DropAllCaps: true, NoNewPrivileges: true, PidsLimit: pidsLimit,
 		MemoryMB: sb.limits.MemoryMB, CPUs: sb.limits.CPUs, NoSwap: sb.noSwap,
 		Tmpfs:   []string{"/tmp:exec,size=1g,mode=1777"},
-		Network: state.Network, NoNetwork: sb.network == "none",
+		Network: state.Network, NoNetwork: sb.network != "open",
 		Runtime: sb.plat.Runtime,
 		Env:     [][2]string{{"TERM", term}, {"COLORTERM", os.Getenv("COLORTERM")}},
 		Volumes: []string{"/home/agent", "/workspace"},
@@ -493,6 +523,9 @@ func (a *Core) createContainer(e backend.Engine, sb *sandbox, opencodeArgs []str
 	}
 	if sb.limits.CPUs > 0 {
 		s.Labels = append(s.Labels, [2]string{state.Label("cpus"), strconv.Itoa(sb.limits.CPUs)})
+	}
+	if sb.network == "filtered" {
+		s.Env = append(s.Env, proxyEnv()...)
 	}
 	if sb.gateway {
 		// entrypoint.sh waits for the gateway there before opencode starts.

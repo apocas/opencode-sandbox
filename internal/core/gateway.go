@@ -205,10 +205,17 @@ func (a *Core) Gateway(name string) {
 	}
 	src := &gatewaySource{name: name, logf: logger.Printf}
 	proxy := &gateway.Proxy{Token: src.token, Routes: src.routes, Transport: gateway.DefaultTransport(), Log: logger.Printf}
+	// With a filtered network, the gateway is also the sandbox's way out,
+	// to the hosts on its list.
+	var filter http.Handler
+	if network, _ := e.Label(c, state.Label("network")); network == "filtered" {
+		filter = newNetGuard(name, logger.Printf).filter()
+	}
+	handler := gateway.Handler(proxy, filter)
 	logger.Printf("serving sandbox '%s'", name)
 	for failures := 0; failures < 8; {
 		started := time.Now()
-		err := serveGateway(e, c, proxy)
+		err := serveGateway(e, c, handler)
 		if time.Since(started) > time.Minute {
 			failures = 0
 		}
@@ -226,7 +233,7 @@ func (a *Core) Gateway(name string) {
 
 // serveGateway runs the half of the gateway that's inside the sandbox and
 // serves what it relays, until that half ends.
-func serveGateway(e backend.Engine, c string, proxy http.Handler) error {
+func serveGateway(e backend.Engine, c string, handler http.Handler) error {
 	argv := e.ExecArgv(c, false, state.DetachKeys, gatewayProgram, "serve", strconv.Itoa(gateway.Port))
 	cmd := exec.Command(argv[0], argv[1:]...)
 	in, err := cmd.StdinPipe()
@@ -242,7 +249,7 @@ func serveGateway(e backend.Engine, c string, proxy http.Handler) error {
 		return err
 	}
 	sess := gateway.NewSession(out, in)
-	srv := &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 5 * time.Minute}
+	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 5 * time.Minute}
 	go func() { _ = srv.Serve(sess) }()
 	<-sess.Done()
 	_ = srv.Close()

@@ -103,9 +103,11 @@ down:
   [gVisor](https://gvisor.dev), a separate user-space kernel. `health` shows
   what this machine has and what you could install
   ([Isolation](#isolation)).
-- **No network at all, if you want.** `--network none` makes a sandbox that
-  reaches nothing but its LLM providers, through the gateway: not the
-  internet, not your network, not your machine ([Network](#network)).
+- **Only the hosts you allow, or no network at all.** `--network filtered`
+  makes a sandbox that reaches its LLM providers and the hosts on its list
+  (`--allow github,npm`, say) and nothing else: not the rest of the internet,
+  not your network, not your machine. `--network none` makes one that reaches
+  only its providers ([Network](#network)).
 - **As many sandboxes as you like.** Every run creates a new one. List them,
   resume one (continuing its last opencode session), or delete them.
 
@@ -201,11 +203,12 @@ keys in their config.
 
 ## Network
 
-A sandbox's network is one of two, chosen when it's created:
+A sandbox's network is one of three, chosen when it's created:
 
 | `--network` | What the sandbox reaches |
 |---|---|
 | `open` (the default) | the internet, your network and services listening on your machine; not other sandboxes |
+| `filtered` | its providers, and the hosts on its list ([below](#a-filtered-network)) |
 | `none` | nothing but its providers, through the [gateway](#api-keys) |
 
 With `none` the sandbox has only its own loopback interface. opencode still
@@ -219,8 +222,75 @@ Every provider of such a sandbox goes through the gateway, the ones without an
 API key too (a model server on your own machine, say), so each needs a known
 address ([API keys](#api-keys)); and the gateway can't be off.
 
-`OPENCODE_SANDBOX_NETWORK=none` makes it the default for new sandboxes. `ls`
-shows each sandbox's network; it can't be changed afterwards.
+`OPENCODE_SANDBOX_NETWORK=none` (or `filtered`) makes it the default for new
+sandboxes. `ls` shows each sandbox's network; it can't be changed afterwards.
+
+### A filtered network
+
+An agent that can reach the whole internet can send your code anywhere; one
+that can reach nothing can't `git pull` or install a package. A filtered
+network is in between: the sandbox reaches its providers, and the hosts you
+put on its list.
+
+```bash
+opencode-sandbox new --allow github,npm        # a list makes the network filtered
+opencode-sandbox allow NAME example.com        # more, later: at once, also while it's open
+opencode-sandbox net NAME                      # its list, and what it was refused
+opencode-sandbox deny NAME evil.example.com    # refused, whatever else allows it
+```
+
+| On the list | Allows |
+|---|---|
+| `example.com` | that host |
+| `*.example.com` | every host under that domain (not `example.com` itself) |
+| `192.0.2.7`, `10.0.0.0/8` | an address, a range of addresses |
+| `example.com:8443` | with `:PORT`, that port only; without, ports 443, 80 and 22 (HTTPS, HTTP, SSH) |
+| `github`, `gitlab`, `npm`, `pypi`, `go` | a built-in list: the hosts that tool needs (`net` shows them) |
+
+How it works: the sandbox is created with no network, exactly as `none` is.
+Its programs are pointed at the gateway as their proxy (`HTTPS_PROXY` and the
+like), and `ssh` leaves through it too, so `git` works over HTTPS and SSH.
+What they ask for comes out on your machine, where opencode-sandbox checks
+the host against the list before anything is looked up or connected to, and
+passes it on or refuses it. So, as with the gateway for API keys, nothing
+listens on a network, and it's the same on Docker, gVisor and Apple
+container.
+
+- **What's refused is written down**, with how often and why: `net NAME`, or
+  `a` on the sandbox in the dashboard, where one key allows a host.
+- **On a Mac, you're asked.** When the sandbox wants a host that's on no
+  list, a dialog asks while the connection waits (up to 30 seconds): Deny
+  (the default), allow until the sandbox closes, or always allow. Deny is
+  kept, so you're asked about a host once. With the screen locked, or after a
+  question went unanswered, nothing is asked: the host is refused and written
+  down. `OPENCODE_SANDBOX_ASK=off` never asks. Elsewhere there's no dialog.
+- **Your machine and your network stay out of reach** unless a rule names
+  their address (`192.168.1.20`, `127.0.0.1:5432`): private and link-local
+  addresses, a cloud's metadata address, this machine's own. A name that
+  leads to one isn't enough, so an allowed host can't be pointed inwards.
+- **The host asked for is the host reached.** For HTTPS, the name in the TLS
+  handshake has to be the host the connection was allowed to, which stops a
+  server that hosts many sites being asked for another one there. What's
+  asked inside the encrypted connection can't be seen; a server that serves
+  another site to a request naming it in there is rare, and is a way to
+  that site.
+- **SSH keys work**, unlike with `none`: the key's host has to be on the
+  list (`github` and `gitlab` include SSH).
+
+What to know before relying on it:
+
+- **An allowed host is a way out** for whoever has an account on it: with
+  `github.com` allowed, an agent that has a token can push to a repository
+  that isn't yours. Allow what the work needs, and no more.
+- **An allowed SSH host is a tunnel** to whatever that host can reach.
+- **Programs that ignore proxy settings have no route**, rather than a
+  filtered one: raw sockets, some JVM tools, old versions of Node. They fail
+  as they would without a network.
+- **A machine that itself needs a proxy to reach the internet isn't
+  supported**: the filter connects straight to the hosts.
+- opencode asks for its own list of models (`models.opencode.ai`) at every
+  start. It's refused and written down without a dialog; opencode works
+  without it. Allow it like any host if you want it.
 
 ## Memory and CPUs
 
@@ -489,11 +559,12 @@ around it. Any key skips it; `OPENCODE_SANDBOX_INTRO=off` turns it off.
 |---|---|
 | `↑` `↓` (`k` `j`) | move |
 | `enter` | open the sandbox, continuing its last session (or attach to it if it's open) |
-| `n` | create a sandbox: a short form (`enter` next field, `shift-tab` previous, `tab` completes the folder; an empty folder field copies nothing). `ctrl-o` in it asks more: the network, where it runs, where its API keys are |
+| `n` | create a sandbox: a short form (`enter` next field, `shift-tab` previous, `tab` completes the folder; an empty folder field copies nothing). `ctrl-o` in it asks more: the network and its allowed hosts, where it runs, where its API keys are, memory and CPUs |
 | `esc` | back: leaves a form or dialog without doing anything, as does `ctrl-c`. While a sandbox is being created, it goes back to the list and the work carries on |
 | `s` | bash inside the sandbox (it must be open) |
 | `c` / `g` | copy a file or folder into its `/workspace` / out of it, into the current folder |
 | `p` | show its public key (`y` copies it) |
+| `a` | for a sandbox with a [filtered network](#a-filtered-network): the hosts it may reach and the ones it was refused (`a` allows the one under the cursor, `d` denies it) |
 | `space`, `d` | mark sandboxes; delete the marked ones (or the selected one), after asking |
 | `/` | filter by name, folder or provider |
 | `h` | the health report (see [Isolation](#isolation)) |
@@ -514,7 +585,8 @@ opencode-sandbox new [DIR] [-n NAME] [-k KEY] [-p PROVIDER] [OPTIONS] [-- ARGS..
 | `-n NAME` | sandbox name (default: folder name plus a random suffix) |
 | `-k KEY` | a key name from `~/.ssh`, `new` (disposable) or `none`; asked if omitted. Only `new` or `none` on [some platforms](#platforms) |
 | `-p PROVIDER` | provider id(s) from your opencode config, several as `a,b`; asked if omitted, automatic if you have only one |
-| `--network open\|none` | what it reaches: `open` (the default) or `none`, only its providers ([Network](#network)) |
+| `--network open\|filtered\|none` | what it reaches: `open` (the default), `filtered` (its providers and the hosts on its list) or `none`, only its providers ([Network](#network)) |
+| `--allow HOSTS` | what a sandbox with a filtered network may reach from the start, as `a,b`: hosts and built-in lists ([A filtered network](#a-filtered-network)). Implies `--network filtered` |
 | `--engine docker\|apple` | where it runs (default: Apple container where that runs, else Docker) |
 | `--runtime NAME` | the Docker runtime it runs on, e.g. `runc` (default: gVisor where Docker has it; see [Isolation](#isolation)) |
 | `--gateway on\|off` | `on` (the default): its providers' API keys stay on your machine. `off`: they go into its config ([API keys](#api-keys)) |
@@ -531,6 +603,8 @@ in the dashboard's form, `ctrl-o` asks them.
 | `open [NAME]` | reopen a sandbox and continue its last session (asks which if no NAME) |
 | `shell NAME` | bash inside an open sandbox |
 | `key NAME` | print the public key a sandbox uses |
+| `net NAME` | show the hosts a sandbox with a [filtered network](#a-filtered-network) may reach, and what it was refused |
+| `allow NAME HOST...` / `deny NAME HOST...` | let it reach hosts, or refuse it hosts whatever else allows them; at once, also while it's open |
 | `cp NAME PATH...` | copy files or folders into a sandbox's `/workspace`, open or closed |
 | `get NAME PATH...` | copy files or folders out of a sandbox (paths relative to `/workspace`) into the current folder |
 | `rm NAME...` / `rm --all [-y]` | delete sandboxes, their files and disposable keys |
@@ -637,10 +711,14 @@ In the sandbox:
 
 ## What it doesn't protect against
 
-- **Outbound network is open, unless you ask for none.** A sandbox that has to
+- **Outbound network is open, unless you ask otherwise.** A sandbox that has to
   reach your servers can also reach the internet, your LAN, services listening
-  on the host and, on a cloud machine, its metadata endpoint. `--network none`
-  closes all of that, and SSH and downloads with it ([Network](#network)).
+  on the host and, on a cloud machine, its metadata endpoint. `--network
+  filtered` leaves only the hosts on its list, and `--network none` closes all
+  of it, SSH and downloads included ([Network](#network)).
+- **A filtered network is as tight as its list.** A host you allow is a way
+  out for whoever has an account on it, and an allowed SSH host is a tunnel to
+  what it reaches ([A filtered network](#a-filtered-network)).
 - **Anything inside an open sandbox can use its key**, and so log into every
   server that trusts it. With `ssh -A`, so can root on the host you forward to.
 - **Without a host agent, the disposable key can be copied out.** Whatever runs
@@ -677,7 +755,8 @@ In the sandbox:
 | `OPENCODE_SANDBOX_CONFIG` | opencode config to take providers from (default `~/.config/opencode/opencode.json`) |
 | `OPENCODE_SANDBOX_NO_AGENT` | `1` to use the no-agent mode ([Platforms](#platforms)) even where a host ssh-agent would work |
 | `OPENCODE_SANDBOX_GATEWAY` | `off` to give new sandboxes their providers' API keys instead of a gateway ([API keys](#api-keys)) |
-| `OPENCODE_SANDBOX_NETWORK` | `none` to give new sandboxes no network ([Network](#network)) |
+| `OPENCODE_SANDBOX_NETWORK` | `none` to give new sandboxes no network, `filtered` one that reaches only the hosts on a sandbox's list ([Network](#network)) |
+| `OPENCODE_SANDBOX_ASK` | `off` to never ask on screen (macOS) about a host that's on no list: it's refused and written down ([A filtered network](#a-filtered-network)) |
 | `OPENCODE_SANDBOX_MEMORY` | the most memory a new sandbox may use, like `8g` (default `4g`; see [Memory and CPUs](#memory-and-cpus)) |
 | `OPENCODE_SANDBOX_CPUS` | the most CPUs a new sandbox may use (default 4) |
 | `OPENCODE_SANDBOX_SEED_HOSTS` | space-separated hosts whose keys are copied from `~/.ssh/known_hosts` into sandboxes; read when `known_hosts` is created, delete it to re-seed |

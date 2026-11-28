@@ -148,18 +148,24 @@ func Source(s core.Sandbox) string {
 	return Tilde(s.Source)
 }
 
-// Network is a sandbox's network as listed: open or none.
+// Network is a sandbox's network as listed: open, filtered or none.
 func Network(s core.Sandbox) string {
-	if s.NoNetwork {
+	switch {
+	case s.NoNetwork:
 		return "none"
+	case s.Filtered:
+		return "filtered"
 	}
 	return "open"
 }
 
 // NetworkWords says in words what a sandbox can reach.
 func NetworkWords(s core.Sandbox) string {
-	if s.NoNetwork {
+	switch {
+	case s.NoNetwork:
 		return "none: it reaches only its providers, through the gateway"
+	case s.Filtered:
+		return "filtered: it reaches only its providers and the hosts on its list"
 	}
 	return "open: the internet, your network and services on this machine"
 }

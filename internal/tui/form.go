@@ -15,6 +15,7 @@ import (
 
 	"github.com/apocas/opencode-sandbox/internal/core"
 	"github.com/apocas/opencode-sandbox/internal/gateway"
+	"github.com/apocas/opencode-sandbox/internal/netpolicy"
 	"github.com/apocas/opencode-sandbox/internal/ui"
 )
 
@@ -32,6 +33,9 @@ type newForm struct {
 	// memory ("8g") and cpus ("6") are the most it may use; each empty for
 	// what new sandboxes get.
 	memory, cpus string
+	// allow is what a sandbox with a filtered network may reach from the
+	// start: hosts and built-in lists, with commas or spaces between them.
+	allow string
 
 	mu   sync.Mutex
 	dots map[string]core.DotFiles // the dot files of each folder looked at
@@ -188,7 +192,7 @@ func (m *model) startForm() tea.Cmd {
 func (nf *newForm) options(name string) core.CreateOptions {
 	o := core.CreateOptions{Workspace: expand(nf.folder), Name: name, Key: nf.key, Providers: nf.providers,
 		Network: nf.network, Gateway: nf.gateway,
-		Memory: strings.TrimSpace(nf.memory), CPUs: strings.TrimSpace(nf.cpus)}
+		Memory: strings.TrimSpace(nf.memory), CPUs: strings.TrimSpace(nf.cpus), Allow: hostWords(nf.allow)}
 	if nf.empty() {
 		o.Workspace, o.Empty = "", true
 	}
@@ -197,6 +201,11 @@ func (nf *newForm) options(name string) core.CreateOptions {
 		o.Key = "none" // nowhere to log in to
 	}
 	return o
+}
+
+// hostWords takes what's typed in the form's list of hosts apart.
+func hostWords(typed string) []string {
+	return strings.FieldsFunc(typed, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' })
 }
 
 // placeOf takes a place's value in the form apart: the engine and runtime
@@ -229,8 +238,25 @@ func moreFields(m *model, nf *newForm) []huh.Field {
 			Description("what the sandbox can reach").
 			Options(
 				huh.NewOption("open  "+dim("the internet, your network and services on this machine"), "open"),
+				huh.NewOption("filtered  "+dim("only its providers and the hosts you allow"), "filtered"),
 				huh.NewOption("none  "+dim("only its providers, through the gateway: no SSH key, no downloads"), "none"),
 			).Value(&nf.network),
+		huh.NewInput().Title("Allowed hosts").
+			Description("for a filtered network: hosts, or the lists github, gitlab, npm, pypi, go").
+			Placeholder("github, example.com").
+			Value(&nf.allow).
+			Validate(func(v string) error {
+				ws := hostWords(v)
+				if len(ws) > 0 && nf.network != "filtered" {
+					return errors.New("a list of hosts goes with the filtered network: pick that above, or leave this empty")
+				}
+				for _, w := range ws {
+					if err := netpolicy.Check(w); err != nil {
+						return err
+					}
+				}
+				return nil
+			}),
 		huh.NewSelect[string]().Title("Runs in").
 			Description("what isolates it").
 			Options(places...).Value(&nf.place).
@@ -257,8 +283,8 @@ func moreFields(m *model, nf *newForm) []huh.Field {
 				huh.NewOption("inside the sandbox  "+dim("in its config, where the agent can read them"), "off"),
 			).Value(&nf.gateway).
 			Validate(func(v string) error {
-				if v == "off" && nf.network == "none" {
-					return errors.New("without a network, a sandbox reaches its providers through the gateway only")
+				if v == "off" && nf.network != "open" {
+					return errors.New("without a network of its own, a sandbox reaches its providers through the gateway only")
 				}
 				return nil
 			}),
@@ -377,7 +403,7 @@ func (m *model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if k, ok := msg.(tea.KeyPressMsg); ok && k.String() == "ctrl+o" && !m.nf.more {
 		m.nf.more = true
 		m.form.UpdateFieldPositions()
-		m.say(info, "more options follow the last field: network, where it runs, API keys, memory and CPUs")
+		m.say(info, "more options follow the last field: network and its allowed hosts, where it runs, API keys, memory and CPUs")
 		return m, nil
 	}
 	// tab moves on from a text field with nothing to complete. Never from
