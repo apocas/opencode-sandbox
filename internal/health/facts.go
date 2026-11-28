@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -70,6 +71,11 @@ type Facts struct {
 	// a secret that goes into a sandbox all the same, and why.
 	Gateway    bool
 	KeysInside []KeyInside
+	// MCPKept is how many MCP servers of your opencode config have secrets
+	// the gateway keeps (their headers, their address); MCPInside are the
+	// ones with a secret that goes into a sandbox all the same, and why.
+	MCPKept   int
+	MCPInside []KeyInside
 	// NoNetwork: new sandboxes get no network (OPENCODE_SANDBOX_NETWORK is
 	// none), and reach only their providers, through the gateway.
 	NoNetwork bool
@@ -89,8 +95,8 @@ type Facts struct {
 // appleOK: new sandboxes can go to Apple container.
 func (f Facts) appleOK() bool { return f.AppleRunning && f.AppleSilicon && f.MacOS >= 26 }
 
-// KeyInside is a provider with a secret the gateway doesn't keep out of
-// sandboxes, and why.
+// KeyInside is a provider (or an MCP server) with a secret the gateway
+// doesn't keep out of sandboxes, and why.
 type KeyInside struct{ Provider, Why string }
 
 // Gather finds out the facts on this machine, with the docker and apple
@@ -174,12 +180,19 @@ func Gather(r run.Runner, docker, apple backend.Engine, version, image string) F
 		if f.Providers == 0 {
 			f.ConfigErr = "no providers"
 		}
-		_, inside := gateway.Routes(root, ids, gateway.Env{Getenv: os.Getenv, Dir: filepath.Dir(f.Config), Home: state.Home()}, false)
+		env := gateway.Env{Getenv: os.Getenv, Dir: filepath.Dir(f.Config), Home: state.Home()}
+		_, inside := gateway.Routes(root, ids, env, false)
 		for _, id := range ids {
 			if why, ok := inside[id]; ok {
 				f.KeysInside = append(f.KeysInside, KeyInside{Provider: id, Why: why})
 			}
 		}
+		servers, inside := gateway.MCP(root, env, false)
+		f.MCPKept = len(servers)
+		for name, why := range inside {
+			f.MCPInside = append(f.MCPInside, KeyInside{Provider: name, Why: why})
+		}
+		sort.Slice(f.MCPInside, func(i, j int) bool { return f.MCPInside[i].Provider < f.MCPInside[j].Provider })
 	}
 	f.Gateway = gateway.Wanted(os.Getenv(gateway.Switch))
 	f.NoNetwork = os.Getenv("OPENCODE_SANDBOX_NETWORK") == "none"

@@ -212,9 +212,22 @@ func TestReport(t *testing.T) {
 		{"no network by default, in Apple container", func(f *Facts) {
 			f.AppleCLI, f.AppleVersion, f.AppleRunning, f.Engine, f.NoNetwork = true, "1.7.1", true, "apple", true
 		}, mac, true, []string{"network    none (OPENCODE_SANDBOX_NETWORK)"}, []string{"each has a network of its own"}},
+		{"MCP servers behind the gateway", func(f *Facts) { f.MCPKept = 2 }, linux, true,
+			[]string{"api keys   stay on this machine", "So do the headers and address of 2 MCP servers in your opencode config."},
+			[]string{"Except"}},
+		{"an MCP server that runs inside a sandbox", func(f *Facts) {
+			f.MCPKept, f.MCPInside = 1, []KeyInside{{"files", "it runs inside the sandbox, with FILES_TOKEN in its environment"}}
+		}, linux, true,
+			[]string{"So do the headers and address of 1 MCP server in your opencode config.",
+				"Except a secret of MCP server files, which goes into the sandbox: it runs inside the sandbox, with FILES_TOKEN in its environment."}, nil},
+		{"the gateway switched off, with MCP servers", func(f *Facts) {
+			f.Gateway, f.MCPKept, f.MCPInside = false, 2, []KeyInside{{"files", "x"}}
+		}, linux, true,
+			[]string{"which can be read inside the sandbox (OPENCODE_SANDBOX_GATEWAY is off); and the secrets of 3 MCP servers in your opencode config"},
+			[]string{"stay on this machine", "Except"}},
 		{"the gateway switched off", func(f *Facts) { f.Gateway, f.KeysInside = false, []KeyInside{{"p9", "x"}} }, linux, true,
 			[]string{"api keys   only the chosen providers' keys, which can be read inside the sandbox (OPENCODE_SANDBOX_GATEWAY is off)"},
-			[]string{"stay on this machine", "Except"}},
+			[]string{"stay on this machine", "Except", "MCP"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

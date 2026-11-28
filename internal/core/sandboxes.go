@@ -47,7 +47,8 @@ type Sandbox struct {
 	// Gateway: its providers' API keys stay on this machine; without it
 	// (sandboxes from before 0.9.0) they're in its config.
 	Gateway bool
-	// APIKeysInside: its config has an API key (see Core.keysInside).
+	// APIKeysInside: its config has an API key, or a secret of an MCP
+	// server (see Core.keysInside).
 	APIKeysInside bool
 	// NoNetwork: it has no network, and reaches only its providers,
 	// through the gateway.

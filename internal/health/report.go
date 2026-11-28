@@ -210,14 +210,25 @@ func network(f Facts, open string) string {
 	return open + ". `opencode-sandbox new --network none` makes one that reaches only its providers, through the gateway."
 }
 
-// apiKeys says where the API keys of a new sandbox's providers are.
+// apiKeys says where the API keys of a new sandbox's providers are, and the
+// secrets of your MCP servers.
 func apiKeys(f Facts) string {
 	if !f.Gateway {
-		return "only the chosen providers' keys, which can be read inside the sandbox (" + gateway.Switch + " is off)"
+		s := "only the chosen providers' keys, which can be read inside the sandbox (" + gateway.Switch + " is off)"
+		if n := f.MCPKept + len(f.MCPInside); n > 0 {
+			s += "; and the secrets of " + plural(n, "MCP server") + " in your opencode config"
+		}
+		return s
 	}
 	s := "stay on this machine: a sandbox reaches its providers through a gateway here that puts the key into each request, so it can use them while it's open and can't read or copy their keys."
+	if f.MCPKept > 0 {
+		s += " So do the headers and address of " + plural(f.MCPKept, "MCP server") + " in your opencode config."
+	}
 	for _, k := range f.KeysInside {
 		s += " Except a secret of " + k.Provider + ", which goes into the sandbox: " + k.Why + "."
+	}
+	for _, k := range f.MCPInside {
+		s += " Except a secret of MCP server " + k.Provider + ", which goes into the sandbox: " + k.Why + "."
 	}
 	return s
 }

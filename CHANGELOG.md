@@ -4,6 +4,37 @@ All notable changes to opencode-sandbox. Versions follow
 [Semantic Versioning](https://semver.org); each release is tagged `vX.Y.Z`.
 To update, see [Updating](README.md#updating).
 
+## [0.13.0] - 2026-11-28
+
+### Added
+
+- **MCP servers' secrets stay on your machine.** A remote MCP server in your
+  opencode config often has a token, in a header or in its address. It used
+  to be copied into every sandbox's config, where the agent could read it.
+  Now such a server is reached through the gateway, like a provider: the
+  sandbox's config has the gateway's address and a token that means nothing
+  outside, and opencode-sandbox puts the real header in on your machine. See
+  [MCP servers](README.md#mcp-servers).
+- `DELETE`, which ends an MCP session, is passed on to MCP servers. Providers
+  stay on `GET`, `HEAD` and `POST`.
+- In a sandbox without a network, every remote MCP server goes through the
+  gateway, so it can be used there.
+- What can't be kept out is said when a sandbox starts, marked with `*` in
+  `ls` and named by `health`: the `environment` of a local MCP server, which
+  runs inside the sandbox, and an OAuth `clientSecret`.
+
+### Changed
+
+- A provider's address inside a sandbox is now
+  `http://127.0.0.1:17872/provider/NAME` (it was `/NAME`), so that a provider
+  and an MCP server can share a name. A sandbox's config is written again each
+  time it opens, so nothing needs doing; the old form is still served.
+
+### Notes
+
+- Sandboxes you already have get this the next time they're opened, without
+  being recreated. One that is open now keeps the config it started with.
+
 ## [0.12.0] - 2026-11-28
 
 ### Added
@@ -398,6 +429,7 @@ First release.
   `--resume` warns about sandboxes created by an older version.
 - Bundles opencode 2.4.2 (x86_64 and arm64 builds, checksums verified).
 
+[0.13.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.13.0
 [0.12.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.12.0
 [0.11.1]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.11.1
 [0.11.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.11.0

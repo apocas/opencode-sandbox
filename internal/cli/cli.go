@@ -377,7 +377,7 @@ func (x *cli) ls(args []string) (int, error) {
 	}
 	for _, s := range ss {
 		if s.APIKeysInside {
-			x.out(x.t.Dim.Render("* API key stored inside the sandbox (made before 0.9.0 or with the gateway off, or one the gateway can't keep: see opencode-sandbox health)"))
+			x.out(x.t.Dim.Render("* an API key or an MCP server's secret is stored inside the sandbox (made before 0.9.0 or with the gateway off, or one the gateway can't keep: see opencode-sandbox health)"))
 			break
 		}
 	}

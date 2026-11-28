@@ -85,7 +85,7 @@ func TestWriteConfigKeepsSecretsHere(t *testing.T) {
 					t.Errorf("the sandbox's config has %s", secret)
 				}
 			}
-			for _, want := range []string{`"baseURL": "http://127.0.0.1:17872/a"`, `"apiKey": "` + st.Token + `"`, `"X-Team": "` + st.Token + `"`,
+			for _, want := range []string{`"baseURL": "http://127.0.0.1:17872/provider/a"`, `"apiKey": "` + st.Token + `"`, `"X-Team": "` + st.Token + `"`,
 				`"apiKey": "SECRET-N"`, `"baseURL": "http://localhost:11434/v1"`} {
 				if !strings.Contains(cfg, want) {
 					t.Errorf("the sandbox's config lacks %s:\n%s", want, cfg)

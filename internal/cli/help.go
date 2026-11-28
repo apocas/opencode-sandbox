@@ -46,7 +46,8 @@ copied like the rest: they're named first, and on a terminal you're asked.
                if you have only one). The sandbox gets a config with only
                those providers; opencode's built-in providers are switched
                off. Their API keys stay on this machine: opencode reaches
-               each provider through a gateway that puts its key in.
+               each provider through a gateway that puts its key in. So do
+               the headers and addresses of your remote MCP servers.
   --empty      copy nothing: the sandbox starts with an empty /workspace
                (instead of DIR)
   --network open|none
@@ -75,7 +76,8 @@ help): OPENCODE_SANDBOX_NETWORK, _ENGINE, _RUNTIME, _GATEWAY, _MEMORY, _CPUS.`},
 	{"ls", "", "list sandboxes", `
 Lists sandboxes: their state, what isolates them (docker, gvisor or apple),
 their SSH key (* when its private part is stored inside), providers (* when
-an API key is stored inside), age and the folder they were copied from.`},
+an API key or an MCP server's secret is stored inside), age and the folder
+they were copied from.`},
 	{"open", "[NAME]", "reopen a sandbox, continuing its last opencode session", `
 Reopens a sandbox and continues its last opencode session, or attaches to it
 if it's open in another terminal (not in Apple container). Without NAME, asks

@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"sync"
 	"syscall"
@@ -43,18 +44,19 @@ func (a *Core) config() any {
 	return a.cfgRoot
 }
 
-// keysInside says whether a sandbox has a provider's secret in its config,
-// as your opencode config is now: all of its providers' without a gateway,
-// and with one, those the gateway can't serve or doesn't keep.
+// keysInside says whether a sandbox has a secret of a provider or of an MCP
+// server in its config, as your opencode config is now: all of them without
+// a gateway, and with one, those the gateway can't serve or doesn't keep.
 func (a *Core) keysInside(r backend.Row) bool {
 	if r.Providers == "" {
 		return true // from before provider selection: it has them all
 	}
 	routes, inside := gateway.Routes(a.config(), splitList(r.Providers), gatewayEnv(), false)
+	servers, serversInside := gateway.MCP(a.config(), gatewayEnv(), false)
 	if r.Gateway != "" {
-		return len(inside) > 0
+		return len(inside)+len(serversInside) > 0
 	}
-	return len(routes)+len(inside) > 0
+	return len(routes)+len(inside)+len(servers)+len(serversInside) > 0
 }
 
 // gatewayState is what a sandbox's gateway is told by the launcher that
@@ -91,6 +93,12 @@ func (a *Core) throughGateway(name string, root any, cfg *occonfig.Object, provi
 		if why, ok := inside[id]; ok {
 			a.Rep.Warn(fmt.Sprintf("provider '%s' has a secret that goes into sandbox '%s': %s", id, name, why))
 		}
+	}
+	// The MCP servers of your config go into every sandbox: theirs too.
+	servers, inside := gateway.MCP(root, gatewayEnv(), all)
+	gateway.RewriteMCP(cfg, servers, st.Token)
+	for _, server := range sorted(inside) {
+		a.Rep.Warn(fmt.Sprintf("MCP server '%s' has a secret that goes into sandbox '%s': %s", server, name, inside[server]))
 	}
 	if err := state.MkdirPrivate(state.RunDir()+"/gateways", state.GatewayDir(name)); err != nil {
 		return err
@@ -254,8 +262,18 @@ type gatewaySource struct {
 	mu       sync.Mutex
 	st       gatewayState
 	stStamp  string
-	rt       map[string]gateway.Route
+	rt       gateway.Table
 	cfgStamp string
+}
+
+// sorted lists a map's keys in order.
+func sorted(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // stamp changes when a file does.
@@ -288,7 +306,11 @@ func (g *gatewaySource) load() {
 		for id, why := range inside {
 			g.logf("provider '%s' has a secret in the sandbox: %s", id, why)
 		}
-		g.rt, g.cfgStamp = routes, s
+		servers, inside := gateway.MCP(root, gatewayEnv(), g.st.All)
+		for name, why := range inside {
+			g.logf("MCP server '%s' has a secret in the sandbox: %s", name, why)
+		}
+		g.rt, g.cfgStamp = gateway.Table{Providers: routes, MCP: servers}, s
 	}
 }
 
@@ -299,7 +321,7 @@ func (g *gatewaySource) token() string {
 	return g.st.Token
 }
 
-func (g *gatewaySource) routes() map[string]gateway.Route {
+func (g *gatewaySource) routes() gateway.Table {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.load()

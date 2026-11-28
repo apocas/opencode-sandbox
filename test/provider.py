@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""A stand-in for a provider's API, for test/integration.sh.
+"""A stand-in for a provider's API and for an MCP server, for
+test/integration.sh.
 
 Usage: provider.py LOG PORTFILE
 
 Listens on a free port of 127.0.0.1 (written to PORTFILE), appends each
-request to LOG as a line of JSON (method, path, and the headers an API key
-travels in), and answers the way an OpenAI-compatible API does.
+request to LOG as a line of JSON (method, path, and the headers a secret
+travels in), and answers the way an OpenAI-compatible API does; at /mcp, the
+way an MCP server does over HTTP, with one tool.
 """
 import json
 import sys
@@ -13,7 +15,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 LOG, PORTFILE = sys.argv[1], sys.argv[2]
-KEY_HEADERS = ("authorization", "x-api-key", "x-goog-api-key", "api-key", "x-forwarded-for")
+KEY_HEADERS = ("authorization", "x-api-key", "x-goog-api-key", "api-key", "x-forwarded-for", "x-mcp-key")
 TEXT = "the gateway works"
 
 
@@ -36,9 +38,39 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def empty(self, code, **headers):
+        self.send_response(code)
+        for name, value in headers.items():
+            self.send_header(name, value)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def mcp(self):
+        return self.path.split("?")[0] == "/mcp"
+
     def do_GET(self):
         self.record()
+        if self.mcp():
+            self.empty(405, Allow="POST, DELETE")  # no stream of its own to offer
+            return
         self.answer({"object": "list", "data": [{"id": "m1", "object": "model"}]})
+
+    def do_DELETE(self):
+        self.record()
+        self.empty(200 if self.mcp() else 405)
+
+    def answer_mcp(self, req):
+        if "id" not in req:  # a notification
+            self.empty(202)
+            return
+        result = {}
+        if req.get("method") == "initialize":
+            result = {"protocolVersion": req.get("params", {}).get("protocolVersion", "2025-03-26"),
+                      "capabilities": {"tools": {}}, "serverInfo": {"name": "stand-in", "version": "1"}}
+        elif req.get("method") == "tools/list":
+            result = {"tools": [{"name": "echo", "description": "Says it back.",
+                                 "inputSchema": {"type": "object", "properties": {}}}]}
+        self.answer({"jsonrpc": "2.0", "id": req["id"], "result": result})
 
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
@@ -47,6 +79,9 @@ class Handler(BaseHTTPRequestHandler):
             req = json.loads(body)
         except ValueError:
             req = {}
+        if self.mcp():
+            self.answer_mcp(req if isinstance(req, dict) else {})
+            return
         base = {"id": "c1", "created": int(time.time()), "model": req.get("model", "m1")}
         usage = {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
         if not req.get("stream"):

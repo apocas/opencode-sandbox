@@ -136,8 +136,8 @@ on Linux with runc and gVisor.
 
 A sandbox's opencode config doesn't have your providers' API keys. In their
 place it has a token that means nothing outside the sandbox, and each
-provider's address is a gateway, `http://127.0.0.1:17872/PROVIDER`, inside the
-sandbox. What opencode sends there is relayed to opencode-sandbox on your
+provider's address is a gateway, `http://127.0.0.1:17872/provider/NAME`, inside
+the sandbox. What opencode sends there is relayed to opencode-sandbox on your
 machine, which swaps the token for the real key and passes the request on to
 the provider.
 
@@ -168,8 +168,33 @@ another name, such as a cloud's `secretAccessKey` or a header of a single
 model, still goes into the sandbox's config, and opencode-sandbox tells you
 so too.
 
+### MCP servers
+
+The MCP servers in your opencode config go into every sandbox, and a remote
+one often has a token: in a header (`"headers": {"Authorization": "Bearer …"}`)
+or in its address (`https://mcp.example.com/sse?key=…`). Those stay on your
+machine too. In the sandbox's config such a server's address is the gateway,
+`http://127.0.0.1:17872/mcp/NAME`, and its headers hold the token that means
+nothing outside; the gateway puts the real headers in and sends the request
+to the real address. `DELETE`, which ends an MCP session, is passed on to an
+MCP server (never to a provider).
+
+What can't be kept out, and is named when a sandbox starts:
+
+- **A local MCP server** (`"type": "local"`) runs inside the sandbox, so the
+  secrets in its `environment` go in with it.
+- **A server you sign in to with OAuth** keeps its token in opencode's own
+  store inside the sandbox; a `clientSecret` in your config goes in as it is.
+- **A token in the path of an address** (`https://mcp.example.com/TOKEN/mcp`)
+  isn't recognised as one: only a query or a password in the address is.
+
+A remote server with nothing to keep is left as it is, and reached directly;
+in a sandbox [without a network](#network), every remote server goes through
+the gateway, as providers do.
+
 `ls` marks the sandboxes with a secret in their config, and those made before
-0.9.0, with `*` after the provider; `health` says which providers and why.
+0.9.0, with `*` after the provider; `health` says which providers and MCP
+servers, and why.
 
 `OPENCODE_SANDBOX_GATEWAY=off` creates sandboxes without a gateway, with the
 keys in their config.
@@ -629,9 +654,11 @@ In the sandbox:
   token in `.git/config`. `new` and `cp` name the dot files that may hold
   some (all but the likes of `.gitignore`) before copying, and on a terminal
   `new` waits for you; what's in other files, they can't tell.
-- **Other secrets in your opencode config are copied as they are**, such as an
-  MCP server's token. Only a provider's `options.apiKey` and `options.headers`
-  stay behind the gateway.
+- **Other secrets in your opencode config are copied as they are**: what a
+  local MCP server has in its `environment`, a secret under a name the gateway
+  doesn't know. A provider's `options.apiKey` and `options.headers` stay
+  behind the gateway, and a remote MCP server's headers and address
+  ([API keys](#api-keys)).
 - **A sandbox can fill your disk.** Memory, CPUs and processes are capped
   ([Memory and CPUs](#memory-and-cpus)); what it writes to its home and
   `/workspace` isn't.

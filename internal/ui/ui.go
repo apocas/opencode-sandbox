@@ -114,7 +114,7 @@ func KeyName(s core.Sandbox) string {
 }
 
 // Providers is a sandbox's providers as listed, with * when an API key of
-// theirs is stored inside.
+// theirs, or a secret of an MCP server, is stored inside.
 func Providers(s core.Sandbox) string {
 	switch {
 	case s.Providers == "":
@@ -125,7 +125,8 @@ func Providers(s core.Sandbox) string {
 	return s.Providers
 }
 
-// APIKeys says in words where a sandbox's providers' API keys are.
+// APIKeys says in words where a sandbox's providers' API keys and its MCP
+// servers' secrets are.
 func APIKeys(s core.Sandbox) string {
 	switch {
 	case !s.APIKeysInside && s.Gateway:
@@ -133,7 +134,7 @@ func APIKeys(s core.Sandbox) string {
 	case !s.APIKeysInside:
 		return "none"
 	case s.Gateway:
-		return "inside the sandbox for a provider the gateway can't keep them for (see opencode-sandbox health); the rest on this machine"
+		return "inside the sandbox for a provider or an MCP server the gateway can't keep them for (see opencode-sandbox health); the rest on this machine"
 	}
 	return "inside the sandbox (it has no gateway)"
 }

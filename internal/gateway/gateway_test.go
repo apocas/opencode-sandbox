@@ -55,7 +55,7 @@ func provider(t *testing.T) (*httptest.Server, func() seen) {
 
 func proxyFor(base string, r Route) *Proxy {
 	r.Base, _ = url.Parse(base)
-	return &Proxy{Token: func() string { return token }, Routes: func() map[string]Route { return map[string]Route{"p1": r} }}
+	return &Proxy{Token: func() string { return token }, Routes: func() Table { return Table{Providers: map[string]Route{"p1": r}} }}
 }
 
 func TestProxyPutsSecretsBack(t *testing.T) {
@@ -580,7 +580,7 @@ func TestRoutesForNoNetwork(t *testing.T) {
 	}
 	Rewrite(cfg, routes, token)
 	got := string(occonfig.Encode(cfg))
-	for _, want := range []string{`"baseURL": "http://127.0.0.1:17872/keyed"`, `"baseURL": "http://127.0.0.1:17872/keyless"`, `"baseURL": "http://127.0.0.1:17872/builtin"`} {
+	for _, want := range []string{`"baseURL": "http://127.0.0.1:17872/provider/keyed"`, `"baseURL": "http://127.0.0.1:17872/provider/keyless"`, `"baseURL": "http://127.0.0.1:17872/provider/builtin"`} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the sandbox's config lacks %s:\n%s", want, got)
 		}
@@ -614,7 +614,7 @@ func TestRewrite(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		`"baseURL": "http://127.0.0.1:17872/a"`, `"baseURL": "http://127.0.0.1:17872/b%20c"`,
+		`"baseURL": "http://127.0.0.1:17872/provider/a"`, `"baseURL": "http://127.0.0.1:17872/provider/b%20c"`,
 		`"apiKey": "` + token + `"`, `"X-Team": "` + token + `"`, `"empty": ""`, `"timeout": 5`, `"name": "A"`,
 		// Left as they were: one has nothing secret, the other no known API.
 		`"baseURL": "http://host.docker.internal:11434/v1"`, `"apiKey": "STAYS"`,

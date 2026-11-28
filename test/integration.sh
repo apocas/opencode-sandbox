@@ -24,13 +24,18 @@ DATA="$XDG_DATA_HOME/opencode-sandbox"
 pass=0 fail=0
 
 # The provider: a stand-in that records what it's sent.
-REAL_KEY=it-real-key-4c1f
+REAL_KEY=it-real-key-4c1f MCP_KEY=it-mcp-secret-9d2e
 python3 "$(dirname "$0")/provider.py" "$T/provider.log" "$T/provider.port" &
 PROVIDER=$!
 disown "$PROVIDER"
 for _ in $(seq 50); do [[ -s "$T/provider.port" ]] && break; sleep 0.1; done
 cat >"$T/one.json" <<EOF
-{"model":"p1/m1","provider":{"p1":{"name":"Fake","npm":"@ai-sdk/openai-compatible","models":{"m1":{}},"options":{"apiKey":"$REAL_KEY","baseURL":"http://127.0.0.1:$(cat "$T/provider.port")/v1"}}}}
+{"model":"p1/m1","provider":{"p1":{"name":"Fake","npm":"@ai-sdk/openai-compatible","models":{"m1":{}},"options":{"apiKey":"$REAL_KEY","baseURL":"http://127.0.0.1:$(cat "$T/provider.port")/v1"}}},
+ "mcp":{"tools":{"type":"remote","url":"http://127.0.0.1:$(cat "$T/provider.port")/mcp","headers":{"X-Mcp-Key":"$MCP_KEY"}}}}
+EOF
+# An MCP server that runs inside a sandbox, with a secret of its own.
+cat >"$T/local.json" <<'EOF'
+{"provider":{"p1":{"name":"One","models":{"m1":{}}}},"mcp":{"servers":{"files":{"type":"local","command":["true"],"environment":{"FILES_TOKEN":"t"}}}}}
 EOF
 cat >"$T/two.json" <<'EOF'
 {"provider":{"p1":{"name":"One","models":{"m1":{}}},"p2":{"name":"Two","models":{"m2":{},"m3":{}}}}}
@@ -51,6 +56,8 @@ refuse() {
   local desc="$1" pat="$2" out; shift 2
   if ! out="$("$@" 2>&1 </dev/null)" && grep -qE -- "$pat" <<<"$out"; then ok "$desc"; else bad "$desc" "$out"; fi
 }
+# flat CMD...: CMD's output as one line (health wraps its lines)
+flat() { "$@" 2>&1 | tr -s ' \n' ' '; }
 # pty KEYS CMD...: run CMD on a 120x30 terminal, pressing KEYS a second
 # apart after 3 seconds: enter, space, down, up, esc, wait (2 more seconds),
 # or text to type.
@@ -228,23 +235,39 @@ for _ in $(seq 60); do [[ "$(state opencode-sandbox-it-h)" == running ]] && brea
 # in neither, and the provider's address is the gateway inside the sandbox.
 CFG='"${OPENCODE_CONFIG:-$HOME/.config/opencode/opencode.json}"'
 out="$(xc it-h sh -c "cat $CFG; echo; env" 2>&1)"
-grep -q '"baseURL": "http://127.0.0.1:17872/p1"' <<<"$out" && ! grep -q "$REAL_KEY" <<<"$out" \
+grep -q '"baseURL": "http://127.0.0.1:17872/provider/p1"' <<<"$out" && ! grep -q "$REAL_KEY" <<<"$out" \
   && ok "the API key isn't in the sandbox" || bad "the API key isn't in the sandbox" "$(sed "s/$REAL_KEY/<THE REAL KEY>/g" <<<"$out" | head -30)"
+# Nor is the header your config sets for an MCP server, or the server's address.
+grep -q '"url": "http://127.0.0.1:17872/mcp/tools"' <<<"$out" && ! grep -q "$MCP_KEY" <<<"$out" \
+  && ok "an MCP server's secret isn't in the sandbox" || bad "an MCP server's secret isn't in the sandbox" "$(sed "s/$MCP_KEY/<THE REAL SECRET>/g" <<<"$out" | head -30)"
 # A request as opencode makes it, with what its config has for a key.
 auth="-H \"Authorization: Bearer \$(jq -r .provider.p1.options.apiKey $CFG)\""
 : >"$T/provider.log"
-out="$(xc it-h sh -c "curl -sS -m 20 $auth http://127.0.0.1:17872/p1/models" 2>&1)"
+out="$(xc it-h sh -c "curl -sS -m 20 $auth http://127.0.0.1:17872/provider/p1/models" 2>&1)"
 grep -q '"id": "m1"' <<<"$out" && grep -q "\"authorization\": \"Bearer $REAL_KEY\"" "$T/provider.log" \
   && ok "the gateway puts the key into a request" || bad "the gateway puts the key into a request" "$out"$'\n'"$(cat "$T/provider.log")"
-out="$(xc it-h sh -c "curl -sS -m 20 -N $auth -H 'Content-Type: application/json' -d '{\"model\":\"m1\",\"stream\":true}' http://127.0.0.1:17872/p1/chat/completions" 2>&1)"
+# An address as a sandbox's config had it before 0.13.0 still works.
+check "an older config's address is served too" '"id": "m1"' xc it-h sh -c "curl -sS -m 20 $auth http://127.0.0.1:17872/p1/models"
+# The MCP server, as opencode asks it: with what its config has for the header.
+: >"$T/provider.log"
+mcp="-H \"X-Mcp-Key: \$(jq -r '.mcp.tools.headers[\"X-Mcp-Key\"]' $CFG)\" -H 'Content-Type: application/json'"
+out="$(xc it-h sh -c "curl -sS -m 20 $mcp -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}' http://127.0.0.1:17872/mcp/tools" 2>&1)"
+grep -q '"name": "echo"' <<<"$out" && grep -q "\"path\": \"/mcp\", \"headers\": {.*\"x-mcp-key\": \"$MCP_KEY\"" "$T/provider.log" \
+  && ok "the gateway puts an MCP server's header into a request" || bad "the gateway puts an MCP server's header into a request" "$out"$'\n'"$(cat "$T/provider.log")"
+# Ending a session is a DELETE: passed on to an MCP server, never to a provider.
+out="$(xc it-h sh -c "curl -sS -m 20 -o /dev/null -w '%{http_code} ' -X DELETE $mcp http://127.0.0.1:17872/mcp/tools
+  curl -sS -m 20 -o /dev/null -w '%{http_code} ' -X DELETE $auth http://127.0.0.1:17872/provider/p1/models
+  curl -sS -m 20 -o /dev/null -w '%{http_code}' $mcp http://127.0.0.1:17872/mcp/nope" 2>&1)"
+[[ "$out" == "200 405 404" ]] && ok "DELETE reaches an MCP server only" || bad "DELETE reaches an MCP server only" "$out"
+out="$(xc it-h sh -c "curl -sS -m 20 -N $auth -H 'Content-Type: application/json' -d '{\"model\":\"m1\",\"stream\":true}' http://127.0.0.1:17872/provider/p1/chat/completions" 2>&1)"
 grep -q 'data: \[DONE\]' <<<"$out" && ok "an answer is streamed back" || bad "an answer is streamed back" "$out"
 # The key goes into the header keys travel in and nowhere else, and only to
 # this sandbox's provider.
 : >"$T/provider.log"
-out="$(xc it-h sh -c "curl -sS -m 20 -o /dev/null -H 'Authorization: Bearer nope' -H \"X-Debug: \$(jq -r .provider.p1.options.apiKey $CFG)\" http://127.0.0.1:17872/p1/models
-  curl -sS -m 20 -o /dev/null -w '%{http_code} ' --path-as-is http://127.0.0.1:17872/p1/../x
-  curl -sS -m 20 -o /dev/null -w '%{http_code} ' http://127.0.0.1:17872/p2/models
-  curl -sS -m 20 -o /dev/null -w '%{http_code}' -X TRACE $auth http://127.0.0.1:17872/p1/models" 2>&1)"
+out="$(xc it-h sh -c "curl -sS -m 20 -o /dev/null -H 'Authorization: Bearer nope' -H \"X-Debug: \$(jq -r .provider.p1.options.apiKey $CFG)\" http://127.0.0.1:17872/provider/p1/models
+  curl -sS -m 20 -o /dev/null -w '%{http_code} ' --path-as-is http://127.0.0.1:17872/provider/p1/../x
+  curl -sS -m 20 -o /dev/null -w '%{http_code} ' http://127.0.0.1:17872/provider/p2/models
+  curl -sS -m 20 -o /dev/null -w '%{http_code}' -X TRACE $auth http://127.0.0.1:17872/provider/p1/models" 2>&1)"
 [[ "$out" == "400 404 405" ]] && grep -q '"Bearer nope"' "$T/provider.log" && ! grep -q "$REAL_KEY" "$T/provider.log" \
   && ok "the key goes nowhere else" || bad "the key goes nowhere else" "$out"$'\n'"$(cat "$T/provider.log")"
 pgrep -f -- "$BIN --internal-gateway it-h" >/dev/null && ok "its gateway runs while it's open" || bad "its gateway runs while it's open"
@@ -272,11 +295,18 @@ pgrep -f -- "$BIN --internal-gateway it-h" >/dev/null && bad "its gateway ends w
 check "opencode reaches its provider" 'the gateway works' "$BIN" new -n it-q -k none -- run hello
 grep -q "\"path\": \"/v1/chat/completions\", \"headers\": {\"authorization\": \"Bearer $REAL_KEY\"" "$T/provider.log" \
   && ok "with the key put in on this machine" || bad "with the key put in on this machine" "$(cat "$T/provider.log")"
+grep -q "\"method\": \"POST\", \"path\": \"/mcp\", \"headers\": {.*\"x-mcp-key\": \"$MCP_KEY\"" "$T/provider.log" \
+  && ok "opencode reaches its MCP server the same way" || bad "opencode reaches its MCP server the same way" "$(cat "$T/provider.log")"
 # Without a gateway, as before 0.9.0, the key is in the sandbox: ls says so.
 OPENCODE_SANDBOX_GATEWAY=off check "create without a gateway" 'opencode v?[0-9]' "$BIN" new -n it-k -k none -- --version
 check "ls marks an API key stored inside" 'it-k .* p1\* ' "$BIN" ls
 check "ls: and only there" 'it-q .* p1 ' "$BIN" ls
-check "ls explains the mark" '\* API key stored inside the sandbox' "$BIN" ls
+check "ls explains the mark" "\* an API key or an MCP server's secret is stored inside the sandbox" "$BIN" ls
+# An MCP server that runs inside a sandbox takes its secrets with it: health
+# says which; and how many servers' secrets stay behind the gateway.
+OPENCODE_SANDBOX_CONFIG="$T/local.json" check "health names an MCP server's secret that goes in" \
+  'Except a secret of MCP server files, which goes into the sandbox: it runs inside the sandbox, with FILES_TOKEN in its environment' flat "$BIN" health
+check "health counts the MCP servers behind the gateway" 'So do the headers and address of 1 MCP server in your opencode config' flat "$BIN" health
 
 echo "== dot files"
 # What often holds secrets is named before a folder is copied; what never
@@ -369,8 +399,6 @@ out="$("$BIN" new "$T/ws" -n it-u -k none --memory 4096g --cpus 4096 -- --versio
 grep -q "has $HAS_CPUS CPUs, so that is this sandbox's limit, not 4096" <<<"$out" && grep -q "of memory, so that is this sandbox's limit, not 4096 GB" <<<"$out" \
   && ok "more than the engine has is said to be less" || bad "more than the engine has is said to be less" "$out"
 [[ "$(limits it-u)" == "$HAS_MB $HAS_CPUS" ]] && ok "and is all the engine has" || bad "and is all the engine has" "$(limits it-u)"
-# (health wraps its lines: read it as one.)
-flat() { "$@" 2>&1 | tr -s ' \n' ' '; }
 OPENCODE_SANDBOX_MEMORY=2g OPENCODE_SANDBOX_CPUS=1 check "health names the limits of new sandboxes" '2 GB of memory, 1 CPU \(' flat "$BIN" health
 refuse "memory without a unit" "isn't an amount of memory; say it like 8g or 512m" "$BIN" new "$T/ws" -n it-x -k none --memory 8
 refuse "too little memory" 'opencode needs at least 512m' "$BIN" new "$T/ws" -n it-x -k none --memory 100m

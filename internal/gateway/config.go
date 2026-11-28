@@ -289,7 +289,7 @@ func Rewrite(cfg *occonfig.Object, routes map[string]Route, token string) {
 				opts = oo.Clone()
 			}
 		}
-		opts.Set("baseURL", fmt.Sprintf("http://127.0.0.1:%d/%s", Port, url.PathEscape(id)))
+		opts.Set("baseURL", fmt.Sprintf("http://127.0.0.1:%d/%s/%s", Port, kindProvider, url.PathEscape(id)))
 		if route.Key != "" {
 			opts.Set("apiKey", token)
 		}
