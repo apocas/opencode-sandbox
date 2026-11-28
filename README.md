@@ -405,7 +405,8 @@ curl -fsSL https://raw.githubusercontent.com/apocas/opencode-sandbox/master/inst
 
 [`install.sh`](install.sh) downloads the latest release's program for your
 system (Linux or macOS, x86_64 or arm64), checks it against the release's
-`SHA256SUMS`, and puts it in `~/.local/bin`. opencode-sandbox is a single
+`SHA256SUMS` (and, where GitHub's `gh` is installed and signed in, that this
+project's release workflow built it), and puts it in `~/.local/bin`. opencode-sandbox is a single
 program with nothing to install next to it, so that's all. Then:
 
 ```bash
@@ -424,8 +425,12 @@ before doing anything.
 | a given version | `OPENCODE_SANDBOX_VERSION=0.6.1 sh` |
 
 The binaries are built by GitHub Actions from the tagged source, with a
-provenance attestation: `gh attestation verify ~/.local/bin/opencode-sandbox -R apocas/opencode-sandbox`
-shows which workflow and commit made yours.
+build attestation: a statement, signed with a key that exists only for that
+run of the release workflow and recorded in a public log, that the workflow
+built these files from this repository at that tag.
+`gh attestation verify ~/.local/bin/opencode-sandbox -R apocas/opencode-sandbox`
+shows which workflow and commit made yours. `opencode-sandbox update` checks
+it by itself ([Updating](#updating)).
 
 Other ways:
 
@@ -468,9 +473,21 @@ opencode-sandbox update            # to the latest release
 opencode-sandbox update --check    # only say whether there's something newer
 ```
 
-`update` downloads the latest release's program, checks it against the
-release's `SHA256SUMS` and that it runs, and only then replaces the one you
-have. Where opencode-sandbox runs from a git clone, it runs
+`update` downloads the latest release's program and checks three things
+before it replaces the one you have:
+
+- that it matches the release's `SHA256SUMS`: the download is whole;
+- that the release's build attestation says this project's release workflow
+  built it, for that release's tag. The checksums sit next to the builds, so
+  whoever could swap a build could swap them too; the attestation is signed
+  by GitHub for the workflow's run, and a build made any other way has none;
+- that it runs, and is the version announced.
+
+If any of them fails, nothing is changed, and it says which. The second check
+needs no network beyond the download: the keys it trusts (Sigstore's, which
+GitHub's attestations for public repositories are signed under) are built
+into the program. If those keys are ever replaced, an old opencode-sandbox
+refuses to update itself, and the [install script](#install) gets the latest. Where opencode-sandbox runs from a git clone, it runs
 `git pull --ff-only` in the clone instead and rebuilds it; changes of your own
 there are never discarded.
 
@@ -790,10 +807,16 @@ CI runs all of this on every push.
    `CHANGELOG.md`.
 2. To bundle a newer opencode, update `OPENCODE_VERSION` and both checksums in
    the `Dockerfile`.
-3. Commit, tag and push:
+3. Now and then, refresh the keys `update` trusts:
+   `go run ./tools/trustedroot /tmp/tuf > internal/selfupdate/trusted_root.json`
+   (it fetches Sigstore's trusted root, checked through Sigstore's own update
+   framework). `go test ./internal/selfupdate/` verifies a real release with
+   them.
+4. Commit, tag and push:
    `git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin master vX.Y.Z`. The
    release workflow builds the binaries, attests them and creates the GitHub
-   release with that version's changelog section.
+   release with that version's changelog section, the builds, their
+   `SHA256SUMS` and the attestation (`attestation.jsonl`).
 
 ## License
 

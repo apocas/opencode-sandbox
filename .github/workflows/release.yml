@@ -33,9 +33,17 @@ jobs:
           awk -v v="$v" '/^## \[/ { on = index($0, "## [" v "]") == 1; next } on' CHANGELOG.md > notes.md
           test -s notes.md || { echo "no CHANGELOG.md section for $v" >&2; exit 1; }
       - uses: actions/attest-build-provenance@v2
+        id: attest
         with:
           subject-path: dist/opencode-sandbox_*
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes-file notes.md
+          ATTESTATION: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          # The attestation goes with the builds: `opencode-sandbox update`
+          # checks a download against it before putting it in place.
+          test -s "$ATTESTATION" || { echo "the attestation step left no bundle" >&2; exit 1; }
+          cp "$ATTESTATION" dist/attestation.jsonl
+          gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes-file notes.md

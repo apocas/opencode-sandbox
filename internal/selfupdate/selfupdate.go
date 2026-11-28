@@ -42,6 +42,9 @@ type Updater struct {
 	GOOS, GOARCH string
 	// Agent is sent as the User-Agent.
 	Agent string
+	// Attested checks a build against its release's attestation; nil for
+	// Attested, which tests replace.
+	Attested func(attestation, sha256 []byte, version string) error
 }
 
 // New makes an Updater for the system this program was built for; version is
@@ -115,9 +118,11 @@ func parseSums(data, goos, goarch string) (Release, error) {
 	return r, nil
 }
 
-// Install downloads r's build, checks it against the release's SHA256SUMS and
-// that it runs, and puts it in place of exe. Nothing changes until the last
-// step, which replaces exe at once: a failure never leaves half a program.
+// Install downloads r's build, checks it against the release's SHA256SUMS,
+// that the release's attestation says this project's release workflow built
+// it, and that it runs, and puts it in place of exe. Nothing changes until
+// the last step, which replaces exe at once: a failure never leaves half a
+// program.
 func (u *Updater) Install(ctx context.Context, r Release, exe string) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
@@ -153,6 +158,11 @@ func (u *Updater) Install(ctx context.Context, r Release, exe string) error {
 	if got := hex.EncodeToString(h.Sum(nil)); got != r.Sum {
 		return fmt.Errorf("the download doesn't match the release's SHA256SUMS (got %s, want %s); nothing was changed", got, r.Sum)
 	}
+	// SHA256SUMS comes from where the build does. The attestation says who
+	// built it, signed with a key only the release workflow's run had.
+	if err := u.attested(ctx, r, h.Sum(nil)); err != nil {
+		return fmt.Errorf("%w; nothing was changed", err)
+	}
 
 	mode := fs.FileMode(0o755)
 	if statErr == nil {
@@ -169,6 +179,34 @@ func (u *Updater) Install(ctx context.Context, r Release, exe string) error {
 		return fmt.Errorf("the downloaded opencode-sandbox %s doesn't run here (%v); nothing was changed", r.Version, err)
 	}
 	return os.Rename(name, exe)
+}
+
+// maxAttestation is more than any release's attestation will be.
+const maxAttestation = 4 << 20
+
+// attested downloads r's attestation and checks the build with that SHA-256
+// against it.
+func (u *Updater) attested(ctx context.Context, r Release, sum []byte) error {
+	body, err := u.open(ctx, u.Base+"/download/v"+r.Version+"/"+Attestation)
+	if err != nil {
+		return fmt.Errorf("opencode-sandbox %s can't be checked: its release has no record of who built it (%s: %v)", r.Version, Attestation, err)
+	}
+	data, err := io.ReadAll(io.LimitReader(body, maxAttestation+1))
+	body.Close()
+	switch {
+	case err != nil:
+		return fmt.Errorf("downloading %s: %w", Attestation, err)
+	case len(data) > maxAttestation:
+		return fmt.Errorf("the release's %s is larger than %d MiB, which none is", Attestation, maxAttestation>>20)
+	}
+	check := u.Attested
+	if check == nil {
+		check = Attested
+	}
+	if err := check(data, sum, r.Version); err != nil {
+		return fmt.Errorf("the download isn't a build that this project's release workflow made for %s, by the release's attestation (%v)", r.Version, err)
+	}
+	return nil
 }
 
 // NoAccessError: the folder the program is in can't be written to.

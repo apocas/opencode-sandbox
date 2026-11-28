@@ -39,9 +39,20 @@ func release(t *testing.T, v, body, listed string) *Updater {
 		fmt.Fprint(w, sums)
 	})
 	mux.HandleFunc("/download/v"+v+"/"+file, func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) })
+	// Its attestation, such as it is here: the release workflow's word that
+	// it built what's listed.
+	mux.HandleFunc("/download/v"+v+"/"+Attestation, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "built "+sum(listed)+" for "+v)
+	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return &Updater{Base: srv.URL, Client: srv.Client(), GOOS: "linux", GOARCH: "arm64", Agent: "opencode-sandbox/0.1.0"}
+	return &Updater{Base: srv.URL, Client: srv.Client(), GOOS: "linux", GOARCH: "arm64", Agent: "opencode-sandbox/0.1.0",
+		Attested: func(attestation, sha []byte, version string) error {
+			if string(attestation) != "built "+hex.EncodeToString(sha)+" for "+version {
+				return fmt.Errorf("it says %q", attestation)
+			}
+			return nil
+		}}
 }
 
 // installed makes the program an update replaces, and returns its path.

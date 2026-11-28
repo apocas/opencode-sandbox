@@ -1,7 +1,9 @@
 #!/bin/sh
 # Installs opencode-sandbox: downloads the latest release's program for this
 # system from GitHub, checks it against the release's SHA256SUMS, and puts it
-# in ~/.local/bin (/usr/local/bin when run as root).
+# in ~/.local/bin (/usr/local/bin when run as root). Where GitHub's gh is
+# installed and signed in, it also checks that this project's release
+# workflow built the download (its build attestation).
 #
 #   curl -fsSL https://raw.githubusercontent.com/apocas/opencode-sandbox/master/install.sh | sh
 #
@@ -94,6 +96,21 @@ main() {
   fetch "$repo/releases/download/v$v/$file" "$tmp/$file" || die "couldn't download $repo/releases/download/v$v/$file"
   got=$(sha256 "$tmp/$file")
   [ "$got" = "$want" ] || die "the download doesn't match the release's SHA256SUMS (got $got, want $want); nothing was installed"
+
+  # SHA256SUMS comes from where the download does. Who built it is said by
+  # its attestation, which gh can check (this script, in plain sh, can't;
+  # `opencode-sandbox update` does it by itself from then on).
+  if has gh && gh attestation verify --help >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    if gh attestation verify "$tmp/$file" --repo apocas/opencode-sandbox \
+      --signer-workflow apocas/opencode-sandbox/.github/workflows/release.yml >"$tmp/attestation.out" 2>&1; then
+      say "checked that this project's release workflow built it (gh attestation verify)"
+    else
+      sed 's/^/  /' "$tmp/attestation.out" >&2
+      die "gh attestation verify doesn't confirm that this project's release workflow built the download; nothing was installed"
+    fi
+  else
+    say "checked against the release's checksums only: who built it is checked too where GitHub's gh is installed and signed in"
+  fi
 
   # Next to where it goes, so that putting it in place is one rename: an
   # opencode-sandbox that's there keeps working until then.

@@ -4,6 +4,32 @@ All notable changes to opencode-sandbox. Versions follow
 [Semantic Versioning](https://semver.org); each release is tagged `vX.Y.Z`.
 To update, see [Updating](README.md#updating).
 
+## [0.15.0] - 2026-11-28
+
+### Added
+
+- **`update` checks who built what it installs.** Until now it checked a
+  download against the release's `SHA256SUMS`, which sit next to the builds:
+  whoever could swap a build could swap its checksum. It now also checks the
+  release's build attestation: a statement signed by GitHub for that run of
+  this project's release workflow, and recorded in a public log, that the
+  workflow built this very file for that release's tag. A build made any
+  other way is refused, and nothing is changed. The keys it trusts are built
+  in, so the check needs no network beyond the download. See
+  [Updating](README.md#updating).
+- Each release now carries its attestation as a file, `attestation.jsonl`,
+  next to the builds.
+- The install script checks the same where GitHub's `gh` is installed and
+  signed in (`gh attestation verify`), and says when it could only check the
+  checksum.
+
+### Notes
+
+- The check comes with the Sigstore library, which makes the program larger:
+  about 22 MB, from about 10 MB.
+- Releases before this one have no attestation file; `update` only ever
+  installs the latest, which has.
+
 ## [0.14.0] - 2026-11-28
 
 ### Added
@@ -476,6 +502,7 @@ First release.
   `--resume` warns about sandboxes created by an older version.
 - Bundles opencode 2.4.2 (x86_64 and arm64 builds, checksums verified).
 
+[0.15.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.15.0
 [0.14.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.14.0
 [0.13.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.13.0
 [0.12.0]: https://github.com/apocas/opencode-sandbox/releases/tag/v0.12.0
