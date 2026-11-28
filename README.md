@@ -15,6 +15,11 @@ only talks to the **LLM provider you pick**, without ever holding its
 
 ## Try it
 
+<p align="center">
+  <img src="docs/demo.gif" width="880" alt="A terminal session. The installer runs. `opencode-sandbox new` asks which SSH key the sandbox may use and shows its new disposable key. opencode opens inside the sandbox and answers a prompt. Then `opencode-sandbox` shows the dashboard, with the sandbox running on gVisor and its API keys kept on the machine.">
+</p>
+<p align="center"><sub>Recorded on Linux with gVisor, with a stand-in for the LLM provider.</sub></p>
+
 **1. Install it.** Paste this into a terminal (macOS or Linux):
 
 ```bash
